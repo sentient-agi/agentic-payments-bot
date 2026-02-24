@@ -1,8 +1,11 @@
-# 🦞 OpenClaw Agentic Payment Skill
+<p align="center">
+  <img height="500px" src="docs/png/banner.png"/>
+</p>
 
-> A dual-protocol (x402 + AP2) agentic payment service for OpenClaw, with web3 & web2 gateway
-> support, AWS KMS key management, policy engine compliance, audit trail, and human-in-the-loop
-> confirmation.
+# 🤖💵 Agentic Payment Service for Open Agent Skills Ecosystem.
+
+> A dual-protocol (x402 + AP2) agentic payment service for Open Agent Skills Ecosystem (including OpenClaw, Claude Code, Codex, Junie, OpenCode, GitHub Copilot, Gemini CLI, etc.),
+> with web3 & web2 gateway support, AWS KMS key management, policy engine compliance, audit trail, and human-in-the-loop confirmation.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
 [![OpenClaw Skill](https://img.shields.io/badge/OpenClaw-Skill-ff6b35.svg)](https://openclaw.ai)
@@ -82,7 +85,7 @@
 
 ## Overview
 
-**openclaw-payment-skill** is an OpenClaw agent skill that enables AI agents to autonomously
+**agent-payments-skill** is an Open Agent Skills Ecosystem compliant skill that enables AI agents to autonomously
 initiate, validate, and execute payments across both blockchain (web3) and traditional (web2)
 payment rails.
 
@@ -97,7 +100,7 @@ payment rails.
 | **Policy engine** | Per-tx limits, daily/weekly/monthly aggregates, time-of-day, blacklist/whitelist, currency restrictions |
 | **Human-in-the-loop** | Automatic escalation on policy violations via CLI prompt, chat prompt, or web API |
 | **Audit trail** | Every action logged to SQLite `audit_log` table + Winston (stdout/stderr/file) |
-| **Three interfaces** | OpenClaw chat, CLI (`openclaw-payment`), REST web API |
+| **Three interfaces** | OpenClaw (or other agent) chat, CLI (`agent-payments`), REST web API |
 | **Fully configurable** | Single YAML file controls all behavior |
 
 ---
@@ -108,7 +111,7 @@ payment rails.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                        OpenClaw Agent                              │
+│                        Agent Payments Skill                        │
 │  ┌───────────┐   ┌───────────────┐   ┌──────────┐                  │
 │  │  Chat UI  │   │   CLI (term)  │   │ Web API  │                  │
 │  └─────┬─────┘   └───────┬───────┘   └────┬─────┘                  │
@@ -157,8 +160,8 @@ payment rails.
 ### Directory Structure
 
 ```
-openclaw-payment-skill/
-├── SKILL.md                          # OpenClaw skill definition (YAML frontmatter + markdown)
+agent-payments-skill/
+├── SKILL.md                          # Open Agent Skills Ecosystem compliant skill definition (YAML frontmatter + markdown)
 ├── package.json                      # npm package manifest
 ├── tsconfig.json                     # TypeScript compiler config
 ├── config/
@@ -438,7 +441,7 @@ The `encrypted_keys` table stores AWS KMS-encrypted blobs:
 | `AWS_ACCESS_KEY_ID` | ✅ | AWS IAM access key for KMS |
 | `AWS_SECRET_ACCESS_KEY` | ✅ | AWS IAM secret key for KMS |
 | `AWS_SESSION_TOKEN` | ❌ | Optional, for temporary credentials / STS |
-| `AWS_KMS_KEY_ID` | ✅ | KMS key ARN or alias (e.g., `alias/openclaw-payments`) |
+| `AWS_KMS_KEY_ID` | ✅ | KMS key ARN or alias (e.g., `alias/agent-payments`) |
 | `AWS_REGION` | ❌ | Overrides `kms.region` in config (fallback: config value) |
 | `CONFIG_PATH` | ❌ | Override default config file path (for web API) |
 
@@ -661,8 +664,8 @@ CREATE TABLE audit_log (
 
 ```bash
 # 1. Clone / copy the skill directory
-git clone https://github.com/your-org/openclaw-payment-skill.git
-cd openclaw-payment-skill
+git clone https://github.com/sentient-agi/agent-payments-skill.git
+cd agent-payments-skill
 
 # 2. Install dependencies
 npm install
@@ -680,13 +683,13 @@ cp config/default.yaml config/production.yaml
 # Edit config/production.yaml with your RPC URLs, gateway settings, policy rules
 
 # 6. Store encrypted keys (first-time setup)
-npx openclaw-payment keys store --alias default_wallet --type web3_private_key --value "0xYOUR_PRIVATE_KEY"
-npx openclaw-payment keys store --alias stripe_api_key --type stripe_token --value "sk_live_YOUR_STRIPE_KEY"
-npx openclaw-payment keys store --alias paypal_client_id --type paypal_token --value "YOUR_PAYPAL_CLIENT_ID"
-npx openclaw-payment keys store --alias paypal_secret --type paypal_token --value "YOUR_PAYPAL_SECRET"
+npx agent-payments keys store --alias default_wallet --type web3_private_key --value "0xYOUR_PRIVATE_KEY"
+npx agent-payments keys store --alias stripe_api_key --type stripe_token --value "sk_live_YOUR_STRIPE_KEY"
+npx agent-payments keys store --alias paypal_client_id --type paypal_token --value "YOUR_PAYPAL_CLIENT_ID"
+npx agent-payments keys store --alias paypal_secret --type paypal_token --value "YOUR_PAYPAL_SECRET"
 
-# 7. Register as OpenClaw skill
-npx skills add ./openclaw-payment-skill
+# 7. Register open agents skill
+npx skills add ./agent-payments-skill
 ```
 
 ### OpenClaw Activation
@@ -696,7 +699,7 @@ Once installed, activate in your OpenClaw configuration:
 ```json
 {
   "skills": {
-    "allow": ["agentic-payment"]
+    "allow": ["agent-payments"]
   }
 }
 ```
@@ -711,14 +714,14 @@ The agent will now be able to use the payment skill when it detects payment-rela
 
 ```yaml
 # ═══════════════════════════════════════════════════════════════════════
-# OpenClaw Agentic Payment Skill — Master Configuration
+# Agent Payments Skill — Master Configuration
 # File: config/default.yaml
 # ═══════════════════════════════════════════════════════════════════════
 
 # ── Skill Metadata ───────────────────────────────────────────────────
 skill:
-  name: agentic-payment            # Skill identifier (matches SKILL.md)
-  version: 1.0.0                   # Skill version
+  name: agent-payments            # Skill identifier (matches SKILL.md)
+  version: 0.2.0                   # Skill version
 
 # ── SQLite Database ──────────────────────────────────────────────────
 database:
@@ -915,7 +918,7 @@ cli:
 
 ## CLI Reference
 
-The CLI is available as `openclaw-payment` (via npm `bin`) or `npx openclaw-payment`.
+The CLI is available as `agent-payments` (via npm `bin`) or `npx agent-payments`.
 
 ### Global Options
 
@@ -928,7 +931,7 @@ The CLI is available as `openclaw-payment` (via npm `bin`) or `npx openclaw-paym
 ### `pay` — Execute a Payment
 
 ```bash
-openclaw-payment pay [options]
+agent-payments pay [options]
 ```
 
 | Option | Required | Description |
@@ -946,7 +949,7 @@ openclaw-payment pay [options]
 
 ```bash
 # x402 USDC payment on Base
-openclaw-payment pay \
+agent-payments pay \
   --protocol x402 \
   --amount 5.00 \
   --currency USDC \
@@ -954,7 +957,7 @@ openclaw-payment pay \
   --network base
 
 # AP2 Stripe payment
-openclaw-payment pay \
+agent-payments pay \
   --protocol ap2 \
   --amount 49.99 \
   --currency USD \
@@ -963,7 +966,7 @@ openclaw-payment pay \
   --description "Monthly subscription"
 
 # PayPal payment with custom config
-openclaw-payment pay \
+agent-payments pay \
   --config config/production.yaml \
   --protocol ap2 \
   --amount 25.00 \
@@ -978,10 +981,10 @@ Extract a `PaymentIntent` JSON from free-form AI text.
 
 ```bash
 # Direct text
-openclaw-payment parse '{"protocol":"x402","action":"pay","amount":"10","currency":"USDC","recipient":"0x..."}'
+agent-payments parse '{"protocol":"x402","action":"pay","amount":"10","currency":"USDC","recipient":"0x..."}'
 
 # From stdin (pipe AI model output)
-echo '... AI response with embedded JSON ...' | openclaw-payment parse -
+echo '... AI response with embedded JSON ...' | agent-payments parse -
 ```
 
 ### `keys` — Key Management
@@ -990,16 +993,16 @@ Manage encrypted keys/tokens stored in SQLite via AWS KMS.
 
 ```bash
 # Store a new encrypted key
-openclaw-payment keys store \
+agent-payments keys store \
   --alias default_wallet \
   --type web3_private_key \
   --value "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 # List all stored keys (metadata only — no plaintext)
-openclaw-payment keys list
+agent-payments keys list
 
 # Delete a key
-openclaw-payment keys delete stripe_api_key
+agent-payments keys delete stripe_api_key
 ```
 
 **Key types:**
@@ -1015,7 +1018,7 @@ openclaw-payment keys delete stripe_api_key
 ### `tx` — Transaction Lookup
 
 ```bash
-openclaw-payment tx <transaction-id>
+agent-payments tx <transaction-id>
 ```
 
 Outputs the full transaction record as JSON, including status, policy violations, tx hash, and
@@ -1024,7 +1027,7 @@ timestamps.
 ### `audit` — Query Audit Log
 
 ```bash
-openclaw-payment audit [options]
+agent-payments audit [options]
 ```
 
 | Option | Description |
@@ -1038,13 +1041,13 @@ openclaw-payment audit [options]
 
 ```bash
 # All payment audit entries from today
-openclaw-payment audit --category payment --since 2026-02-10T00:00:00Z
+agent-payments audit --category payment --since 2026-02-10T00:00:00Z
 
 # Audit trail for a specific transaction
-openclaw-payment audit --tx "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+agent-payments audit --tx "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 # Recent policy violations
-openclaw-payment audit --category policy --limit 20
+agent-payments audit --category policy --limit 20
 ```
 
 ---
@@ -1083,8 +1086,8 @@ Health check endpoint.
 ```json
 {
   "status": "ok",
-  "skill": "agentic-payment",
-  "version": "1.0.0"
+  "skill": "agent-payments",
+  "version": "0.2.0"
 }
 ```
 
@@ -1447,7 +1450,7 @@ export AWS_ACCESS_KEY_ID="AKIA..."
 export AWS_SECRET_ACCESS_KEY="..."
 export AWS_KMS_KEY_ID="arn:aws:kms:..."
 
-openclaw-payment pay \
+agent-payments pay \
   --protocol x402 \
   --amount 5.00 \
   --currency USDC \
@@ -1582,19 +1585,19 @@ curl -X POST http://localhost:3402/api/v1/confirm/abc123... \
 
 ```bash
 # Store a wallet private key
-openclaw-payment keys store \
+agent-payments keys store \
   --alias trading_wallet \
   --type web3_private_key \
   --value "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 # Store Stripe API key
-openclaw-payment keys store \
+agent-payments keys store \
   --alias stripe_api_key \
   --type stripe_token \
   --value "sk_live_abcdefghijklmnop"
 
 # List all keys (plaintext is NEVER shown)
-openclaw-payment keys list
+agent-payments keys list
 
 # ┌──────────┬───────────────────┬─────────────────┬─────────────────────────────┬─────────────────────┐
 # │ id       │ key_type          │ key_alias       │ kms_key_id                  │ created_at          │
@@ -1604,7 +1607,7 @@ openclaw-payment keys list
 # └──────────┴───────────────────┴─────────────────┴─────────────────────────────┴─────────────────────┘
 
 # Delete a key
-openclaw-payment keys delete trading_wallet
+agent-payments keys delete trading_wallet
 ```
 
 ---
@@ -1656,12 +1659,12 @@ npm run dev          # ts-node src/index.ts
 | Symptom | Cause | Fix |
 |---|---|---|
 | `AWS KMS key ID not found in env var` | Missing `AWS_KMS_KEY_ID` environment variable | Export `AWS_KMS_KEY_ID` before running |
-| `Encrypted key not found for alias 'X'` | Key not stored yet | Run `openclaw-payment keys store --alias X ...` |
+| `Encrypted key not found for alias 'X'` | Key not stored yet | Run `agent-payments keys store --alias X ...` |
 | `Network 'X' is disabled in configuration` | Chain disabled in YAML | Set `web3.X.enabled: true` in config |
 | `x402 protocol is disabled in configuration` | Protocol toggle | Set `protocols.x402.enabled: true` |
 | `Could not parse a valid payment intent` | AI output doesn't contain valid JSON | Ensure agent uses the exact JSON schema from `SKILL.md` |
 | `SQLITE_BUSY` errors | Concurrent writes | Increase `database.busy_timeout_ms` or ensure WAL mode |
-| `Policy violations detected` (unexpected) | Aggregate limits hit | Check `openclaw-payment audit --category policy` and adjust `policy.rules` |
+| `Policy violations detected` (unexpected) | Aggregate limits hit | Check `agent-payments audit --category policy` and adjust `policy.rules` |
 | Web API not starting | Port conflict | Change `web_api.port` in config |
 
 ### Debugging
@@ -1674,12 +1677,12 @@ npm run dev          # ts-node src/index.ts
 
 2. **Check the audit log** for full context:
    ```bash
-   openclaw-payment audit --limit 20
+   agent-payments audit --limit 20
    ```
 
 3. **Inspect a specific transaction:**
    ```bash
-   openclaw-payment tx <transaction-id>
+   agent-payments tx <transaction-id>
    ```
 
 4. **Query SQLite directly:**
@@ -1696,5 +1699,5 @@ This project is licensed under the **Apache 2.0 License**. See the [`LICENSE-APA
 
 ---
 
-> Built with 🦞 for the [OpenClaw](https://openclaw.ai) ecosystem.
+> Built with 🤖💵 for the [Open Agent Skills Ecosystem](https://www.npmjs.com/package/skills#supported-agents) and for the [OpenClaw](https://openclaw.ai) ecosystem.
 > Protocols: [x402](https://x402.org/) · [AP2](https://ap2-protocol.org/)
