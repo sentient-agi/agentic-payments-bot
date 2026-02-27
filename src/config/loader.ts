@@ -41,6 +41,12 @@ const PolicyRulesSchema = z.object({
 
 const ConfigSchema = z.object({
   skill: z.object({ name: z.string(), version: z.string() }),
+  dry_run: z.object({
+    enabled: z.boolean().default(false),
+    encryption_key_env: z.string().default("DRYRUN_ENCRYPTION_KEY"),
+    stub_mode: z.enum(["success", "failure", "random"]).default("success"),
+    simulated_latency_ms: z.number().default(500),
+  }).default({ enabled: false, encryption_key_env: "DRYRUN_ENCRYPTION_KEY", stub_mode: "success", simulated_latency_ms: 500 }),
   database: z.object({
     path: z.string(),
     wal_mode: z.boolean().default(true),
