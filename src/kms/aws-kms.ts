@@ -12,6 +12,10 @@ import { getEncryptedKey, storeEncryptedKey } from "../db/key-store";
 
 let _kmsClient: KMSClient | null = null;
 
+function isDryRun(): boolean {
+  return getConfig().dry_run.enabled;
+}
+
 function getKmsClient(): KMSClient {
   if (!_kmsClient) {
     const config = getConfig();
@@ -35,13 +39,19 @@ function getKmsKeyId(): string {
 }
 
 /**
- * Encrypt plaintext via AWS KMS and store ciphertext in SQLite.
+ * Encrypt plaintext and store ciphertext in SQLite.
+ * In dry-run mode, uses local AES-256-GCM instead of AWS KMS.
  */
 export async function encryptAndStore(
   keyAlias: string,
   keyType: string,
   plaintext: string
 ): Promise<string> {
+  if (isDryRun()) {
+    const { dryRunEncryptAndStore } = await import("../dry-run/wallet");
+    return dryRunEncryptAndStore(keyAlias, keyType, plaintext);
+  }
+
   const logger = getLogger();
   const kms = getKmsClient();
   const kmsKeyId = getKmsKeyId();
@@ -72,10 +82,16 @@ export async function encryptAndStore(
 }
 
 /**
- * Retrieve encrypted key from SQLite and decrypt via AWS KMS.
+ * Retrieve encrypted key from SQLite and decrypt.
  * Returns plaintext string. NEVER log this value.
+ * In dry-run mode, uses local AES-256-GCM instead of AWS KMS.
  */
 export async function retrieveAndDecrypt(keyAlias: string): Promise<string> {
+  if (isDryRun()) {
+    const { dryRunRetrieveAndDecrypt } = await import("../dry-run/wallet");
+    return dryRunRetrieveAndDecrypt(keyAlias);
+  }
+
   const logger = getLogger();
   const kms = getKmsClient();
 
