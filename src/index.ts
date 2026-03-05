@@ -1,5 +1,6 @@
 // Main Orchestrator (OpenClaw Entry Point)
 //
+import "dotenv/config";
 import { loadConfig, getConfig } from "./config/loader";
 import { initLogger, getLogger } from "./logging/logger";
 import { initDatabase } from "./db/sqlite";
@@ -30,14 +31,50 @@ import type { Address, Hash } from "viem";
 
 // ─── Initialize ─────────────────────────────────────────────────────────────
 
-export function bootstrap(configPath?: string) {
+export function bootstrap(configPath?: string, dryRunOverride?: boolean) {
   const config = loadConfig(configPath);
+
+  // CLI --dry-run flag can override the YAML setting
+  if (dryRunOverride !== undefined) {
+    (config as any).dry_run.enabled = dryRunOverride;
+  }
+
   initLogger(config);
   initDatabase(config);
-  getLogger().info("OpenClaw Payment Skill bootstrapped", {
+
+  const logger = getLogger();
+
+  if (config.dry_run.enabled) {
+    logger.warn("╔══════════════════════════════════════════════════╗");
+    logger.warn("║            🧪 DRY-RUN MODE ENABLED                ║");
+    logger.warn("║  No real payments will be made.                  ║");
+    logger.warn("║  AWS KMS is bypassed (local AES-256 encryption). ║");
+    logger.warn("║  All gateway responses are simulated stubs.      ║");
+    logger.warn("╚══════════════════════════════════════════════════╝");
+
+    // Ensure the local encryption key exists
+    const { resolveDryRunEncryptionKey } = require("./dry-run/crypto");
+    resolveDryRunEncryptionKey();
+
+    // Ensure a default wallet exists
+    const { ensureDryRunWallet } = require("./dry-run/wallet");
+    const wallet = ensureDryRunWallet("default_wallet");
+    logger.info(`[DRY-RUN] Default wallet: ${wallet.address}`);
+
+    auditLog("info", "system", "dryrun_mode_activated", {
+      address: wallet.address,
+      stub_mode: config.dry_run.stub_mode,
+    });
+  }
+
+  logger.info("OpenClaw Payment Skill bootstrapped", {
     version: config.skill.version,
+    dryRun: config.dry_run.enabled,
   });
-  auditLog("info", "system", "skill_bootstrapped", { version: config.skill.version });
+  auditLog("info", "system", "skill_bootstrapped", {
+    version: config.skill.version,
+    dryRun: config.dry_run.enabled,
+  });
 }
 
 // ─── Main Payment Flow ──────────────────────────────────────────────────────
@@ -51,6 +88,7 @@ export interface PaymentExecutionResult {
   confirmationRequired: boolean;
   confirmationPrompt?: string; // for chat channel
   error?: string;
+  dryRun: boolean;
 }
 
 /**
@@ -59,7 +97,7 @@ export interface PaymentExecutionResult {
  * 2. Route to protocol + gateway
  * 3. Policy engine check
  * 4. Human confirmation if needed
- * 5. Execute payment
+ * 5. Execute payment (or stub in dry-run)
  * 6. Record & audit
  */
 export async function executePayment(
@@ -68,6 +106,8 @@ export async function executePayment(
   walletKeyAlias: string = "default_wallet"
 ): Promise<PaymentExecutionResult> {
   const logger = getLogger();
+  const config = getConfig();
+  const dryRun = config.dry_run.enabled;
 
   // ── Step 1: Parse intent ──────────────────────────────────────────────
   let intent: PaymentIntent;
@@ -121,6 +161,7 @@ export async function executePayment(
         policyResult,
         confirmationRequired: true,
         confirmationPrompt: prompt,
+        dryRun,
       };
     } else if (channel === "web_api") {
       // For web API: register pending and return immediately
@@ -132,6 +173,7 @@ export async function executePayment(
         policyResult,
         confirmationRequired: true,
         confirmationPrompt: `Confirmation required for tx ${tx.id}. POST /api/v1/confirm/${tx.id} with {"confirmed": true}`,
+        dryRun,
       };
     }
 
@@ -150,6 +192,7 @@ export async function executePayment(
         policyResult,
         confirmationRequired: true,
         error: "Payment rejected by human confirmation.",
+        dryRun,
       };
     }
 
@@ -172,13 +215,14 @@ export async function executePayment(
         txHash: result.txHash,
         policyResult,
         confirmationRequired: policyResult.requiresHumanConfirmation,
+        dryRun,
       };
     } else {
       const result = await executeWeb2Payment(route.gateway, intent);
       updateTransactionStatus(tx.id, "executed", {
         tx_hash: result.transaction_id,
       });
-      auditLog("info", "payment", "web2_payment_executed", {
+      auditLog("info", "payment", dryRun ? "dryrun_web2_executed" : "web2_payment_executed", {
         tx_id: tx.id,
         gateway: route.gateway,
         transaction_id: result.transaction_id,
@@ -189,6 +233,7 @@ export async function executePayment(
         web2Result: result,
         policyResult,
         confirmationRequired: policyResult.requiresHumanConfirmation,
+        dryRun,
       };
     }
   } catch (err) {
@@ -197,6 +242,7 @@ export async function executePayment(
     auditLog("error", "payment", "payment_execution_failed", {
       tx_id: tx.id,
       error: message,
+      dryRun,
     });
     logger.error("Payment execution failed", { tx_id: tx.id, error: message });
     return {
@@ -205,6 +251,7 @@ export async function executePayment(
       policyResult,
       confirmationRequired: policyResult.requiresHumanConfirmation,
       error: message,
+      dryRun,
     };
   }
 }
@@ -218,6 +265,7 @@ async function executeWeb3Payment(
   tx: TransactionRecord
 ): Promise<{ txHash: string }> {
   const logger = getLogger();
+  const dryRun = getConfig().dry_run.enabled;
   const network = intent.network ?? "ethereum";
   const to = intent.recipient as Address;
 
@@ -242,13 +290,13 @@ async function executeWeb3Payment(
 
   // Optionally wait for confirmation
   const receipt = await waitForConfirmation(txHash, network);
-  logger.info("web3: Transaction confirmed", {
+  logger.info(`${dryRun ? "[DRY-RUN] " : ""}web3: Transaction confirmed`, {
     txHash,
     status: receipt.status,
     block: receipt.blockNumber.toString(),
   });
 
-  auditLog("info", "payment", "web3_payment_confirmed", {
+  auditLog("info", "payment", dryRun ? "dryrun_web3_confirmed" : "web3_payment_confirmed", {
     tx_id: tx.id,
     txHash,
     status: receipt.status,
