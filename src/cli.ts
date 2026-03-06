@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // CLI Interface
 //
+import "dotenv/config";
 import { Command } from "commander";
 import { bootstrap, executePayment } from "./index";
 import { PaymentIntentSchema, type PaymentIntent } from "./protocols/router";
@@ -8,6 +9,7 @@ import { encryptAndStore, retrieveAndDecrypt } from "./kms/aws-kms";
 import { listEncryptedKeys, deleteEncryptedKey } from "./db/key-store";
 import { queryAuditLog } from "./db/audit";
 import { getTransactionById } from "./db/transactions";
+import { getConfig } from "./config/loader";
 import { getDb } from "./db/sqlite";
 
 const program = new Command();
@@ -15,8 +17,16 @@ const program = new Command();
 program
   .name("openclaw-payment")
   .description("OpenClaw Agentic Payment Skill — CLI Interface")
-  .version("0.2.0")
-  .option("-c, --config <path>", "Path to YAML config file", "config/default.yaml");
+  .version("0.3.0")
+  .option("-c, --config <path>", "Path to YAML config file", "config/default.yaml")
+  .option("--dry-run", "Enable dry-run mode (no real payments, no AWS KMS)");
+
+// ── Helper: resolve dry-run from CLI flag or config ─────────────────────────
+
+function resolveDryRun(): boolean | undefined {
+  const opts = program.opts();
+  return opts.dryRun === true ? true : undefined;
+}
 
 // ── pay command ─────────────────────────────────────────────────────────────
 
@@ -33,7 +43,8 @@ program
   .option("--wallet <alias>", "Wallet key alias in key store", "default_wallet")
   .action(async (opts) => {
     const configPath = program.opts().config;
-    bootstrap(configPath);
+    bootstrap(configPath, resolveDryRun());
+    const config = getConfig();
 
     const intent: PaymentIntent = PaymentIntentSchema.parse({
       protocol: opts.protocol,
@@ -50,6 +61,9 @@ program
     try {
       const result = await executePayment(intent, "cli", opts.wallet);
       console.log("\n═══════════════════════════════════════");
+      if (result.dryRun) {
+        console.log("🧪 DRY-RUN — no real payment was made");
+      }
       if (result.success) {
         console.log("✅ Payment executed successfully!");
         if (result.txHash) console.log(`   TX Hash: ${result.txHash}`);
@@ -75,7 +89,7 @@ program
   .argument("<text>", "AI output text (or use - for stdin)")
   .action(async (text: string) => {
     const configPath = program.opts().config;
-    bootstrap(configPath);
+    bootstrap(configPath, resolveDryRun());
 
     const { parsePaymentIntentFromAIOutput } = await import("./protocols/router");
     let input = text;
@@ -103,12 +117,12 @@ const keysCmd = program.command("keys").description("Manage encrypted keys/token
 
 keysCmd
   .command("store")
-  .description("Encrypt and store a key/token via AWS KMS")
+  .description("Encrypt and store a key/token via AWS KMS (or local AES in dry-run)")
   .requiredOption("--alias <alias>", "Key alias")
   .requiredOption("--type <type>", "Key type (web3_private_key, stripe_token, etc.)")
   .requiredOption("--value <value>", "Plaintext value to encrypt")
   .action(async (opts) => {
-    bootstrap(program.opts().config);
+    bootstrap(program.opts().config, resolveDryRun());
     const id = await encryptAndStore(opts.alias, opts.type, opts.value);
     console.log(`✅ Key stored with ID: ${id}, alias: ${opts.alias}`);
   });
@@ -117,7 +131,7 @@ keysCmd
   .command("list")
   .description("List all encrypted keys (metadata only)")
   .action(() => {
-    bootstrap(program.opts().config);
+    bootstrap(program.opts().config, resolveDryRun());
     const keys = listEncryptedKeys();
     if (keys.length === 0) {
       console.log("No encrypted keys stored.");
@@ -131,7 +145,7 @@ keysCmd
   .description("Delete an encrypted key by alias")
   .argument("<alias>", "Key alias")
   .action((alias: string) => {
-    bootstrap(program.opts().config);
+    bootstrap(program.opts().config, resolveDryRun());
     const deleted = deleteEncryptedKey(alias);
     console.log(deleted ? `✅ Deleted key: ${alias}` : `❌ Key not found: ${alias}`);
   });
@@ -143,7 +157,7 @@ program
   .description("Look up a transaction by ID")
   .argument("<txId>", "Transaction ID")
   .action((txId: string) => {
-    bootstrap(program.opts().config);
+    bootstrap(program.opts().config, resolveDryRun());
     const tx = getTransactionById(txId);
     if (tx) {
       console.log(JSON.stringify(tx, null, 2));
@@ -162,7 +176,7 @@ program
   .option("--since <iso>", "Filter by timestamp (ISO 8601)")
   .option("--limit <n>", "Max results", "50")
   .action((opts) => {
-    bootstrap(program.opts().config);
+    bootstrap(program.opts().config, resolveDryRun());
     const entries = queryAuditLog({
       category: opts.category,
       tx_id: opts.tx,
@@ -176,6 +190,131 @@ program
         console.log(JSON.stringify(entry));
       }
     }
+  });
+
+// ── demo command ────────────────────────────────────────────────────────────
+
+program
+  .command("demo")
+  .description("Run an interactive dry-run demo with sample payments")
+  .option("--stub-mode <mode>", "Stub mode: success | failure | random", "success")
+  .action(async (opts) => {
+    // Force dry-run regardless of config
+    bootstrap(program.opts().config, true);
+
+    const config = getConfig();
+    // Override stub mode for this demo session
+    (config as any).dry_run.stub_mode = opts.stubMode;
+
+    console.log("\n🧪 ══════════════════════════════════════════════");
+    console.log("   AGENTIC PAYMENT SKILL — INTERACTIVE DEMO");
+    console.log("   Stub mode: " + opts.stubMode);
+    console.log("══════════════════════════════════════════════════\n");
+
+    const demos: Array<{ label: string; intent: PaymentIntent }> = [
+      {
+        label: "1️⃣  x402 USDC payment on Base (web3)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "x402",
+          action: "pay",
+          amount: "5.00",
+          currency: "USDC",
+          recipient: "0x742d35Cc6635C0532925a3b844Bc9e7595f2bD65",
+          network: "base",
+          gateway: "viem",
+          description: "Demo: x402 USDC on Base",
+        }),
+      },
+      {
+        label: "2️⃣  AP2 Stripe payment (web2)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "49.99",
+          currency: "USD",
+          recipient: "merchant-demo-001",
+          network: "web2",
+          gateway: "stripe",
+          description: "Demo: AP2 Stripe payment",
+        }),
+      },
+      {
+        label: "3️⃣  AP2 PayPal payment (web2)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "25.00",
+          currency: "USD",
+          recipient: "seller@demo.example.com",
+          network: "web2",
+          gateway: "paypal",
+          description: "Demo: AP2 PayPal payment",
+        }),
+      },
+      {
+        label: "4️⃣  x402 ETH transfer on Ethereum (web3)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "x402",
+          action: "pay",
+          amount: "0.01",
+          currency: "ETH",
+          recipient: "0x4838B106FCe9647Bdf1E7877BF73cE8B0BAD5f97",
+          network: "ethereum",
+          gateway: "viem",
+          description: "Demo: x402 ETH transfer",
+        }),
+      },
+      {
+        label: "5️⃣  AP2 Visa Direct payment (web2)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "100.00",
+          currency: "USD",
+          recipient: "4111111111111111",
+          network: "web2",
+          gateway: "visa",
+          description: "Demo: AP2 Visa Direct push",
+        }),
+      },
+      {
+        label: "6️⃣  Over-limit payment (triggers policy engine)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "99999.99",
+          currency: "USD",
+          recipient: "merchant-big-spender",
+          network: "web2",
+          gateway: "stripe",
+          description: "Demo: over-limit, expect policy violation",
+        }),
+      },
+    ];
+
+    for (const demo of demos) {
+      console.log(`\n─── ${demo.label} ───`);
+      try {
+        const result = await executePayment(demo.intent, "cli", "default_wallet");
+        if (result.success) {
+          console.log(`  ✅ Success${result.txHash ? ` | TX: ${result.txHash}` : ""}${result.web2Result ? ` | ID: ${result.web2Result.transaction_id}` : ""}`);
+        } else {
+          console.log(`  ❌ Not executed: ${result.error ?? "confirmation required"}`);
+        }
+        if (result.policyResult.violations.length > 0) {
+          for (const v of result.policyResult.violations) {
+            console.log(`  ⚠️  Policy: [${v.rule}] ${v.message}`);
+          }
+        }
+      } catch (err) {
+        console.log(`  💥 Error: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    console.log("\n══════════════════════════════════════════════════");
+    console.log("  Demo complete. All transactions are in SQLite.");
+    console.log("  Run: openclaw-payment audit --limit 20");
+    console.log("══════════════════════════════════════════════════\n");
   });
 
 program.parse();
