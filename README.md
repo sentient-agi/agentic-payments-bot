@@ -1,5 +1,5 @@
 <p align="center">
-  <img height="500px" src="docs/png/banner.png"/>
+  <img src="docs/png/banner.png" style="max-height:50%; height:50%; width:auto;" />
 </p>
 
 # 🤖💵 Agentic Payment Service for Open Agent Skills Ecosystem.
@@ -43,6 +43,7 @@
   - [Winston Logger (stdout/stderr/file)](#winston-logger-stdoutstderrfile)
 - [Database Schema](#database-schema)
 - [Installation](#installation)
+- [Dry-Run Mode](#dry-run-mode)
 - [Configuration Reference (YAML)](#configuration-reference-yaml)
   - [Full Annotated Configuration](#full-annotated-configuration)
   - [Configuration Sections](#configuration-sections)
@@ -164,6 +165,8 @@ agent-payments-skill/
 ├── SKILL.md                          # Open Agent Skills Ecosystem compliant skill definition (YAML frontmatter + markdown)
 ├── package.json                      # npm package manifest
 ├── tsconfig.json                     # TypeScript compiler config
+├── .env.example                      # Environment variable template
+├── .gitignore
 ├── config/
 │   └── default.yaml                  # Master YAML configuration
 ├── src/
@@ -184,7 +187,11 @@ agent-payments-skill/
 │   │   └── web2/
 │   │       └── gateways.ts           # Stripe, PayPal, Visa, Mastercard
 │   ├── kms/
-│   │   └── aws-kms.ts               # AWS KMS encrypt/decrypt
+│   │   └── aws-kms.ts               # AWS KMS encrypt/decrypt (delegates to dry-run when enabled)
+│   ├── dry-run/
+│   │   ├── crypto.ts                 # Local AES-256-GCM encryption (no KMS)
+│   │   ├── stubs.ts                  # Gateway stub responses (success/failure/random)
+│   │   └── wallet.ts                 # Viem key generation + local encrypt/store
 │   ├── db/
 │   │   ├── sqlite.ts                 # SQLite init + migrations
 │   │   ├── key-store.ts              # Encrypted key CRUD
@@ -705,6 +712,303 @@ Once installed, activate in your OpenClaw configuration:
 ```
 
 The agent will now be able to use the payment skill when it detects payment-related prompts.
+
+---
+
+## Dry-Run Mode
+
+Dry-run mode lets you explore every feature of the skill — protocol routing,
+policy engine, human-in-the-loop confirmation, audit trail, CLI, and web API —
+**without any real payments, real blockchain transactions, or AWS credentials.**
+
+### What Happens in Dry-Run
+
+| Component | Production | Dry-Run |
+|---|---|---|
+| **AWS KMS** | Encrypts/decrypts via real KMS API | Bypassed — local AES-256-GCM with a key from `DRYRUN_ENCRYPTION_KEY` env var |
+| **Encryption key** | KMS key ARN | 256-bit hex key, auto-generated on first run and written to `.env` |
+| **Wallet keys** | Viem `generatePrivateKey()` → encrypted via KMS | Viem `generatePrivateKey()` → encrypted via local AES → stored in SQLite |
+| **Web3 payments** | Real on-chain transactions via Viem | Stub: returns fake tx hash, simulated confirmation |
+| **Web2 payments** | Real API calls to Stripe / PayPal / Visa / MC | Stub: returns fake transaction IDs, simulated status |
+| **Policy engine** | ✅ runs normally | ✅ runs normally |
+| **Human confirmation** | ✅ prompts on violations | ✅ prompts on violations |
+| **Audit trail** | ✅ writes to SQLite + Winston | ✅ writes to SQLite + Winston (tagged with `dryrun_*` actions) |
+| **Transaction records** | ✅ stored in SQLite | ✅ stored in SQLite |
+
+### How Dry-Run Works End-to-End
+
+1. **Activation** — Enable via `dry_run.enabled: true` in YAML, or pass `--dry-run` on the CLI.
+
+2. **Encryption key** — On first run, if `DRYRUN_ENCRYPTION_KEY` is not set, a random 256-bit key is generated, written to `.env`, and loaded into `process.env`. All subsequent runs reuse it.
+
+3. **Wallet generation** — `bootstrap()` calls `ensureDryRunWallet("default_wallet")` which uses Viem's `generatePrivateKey()`, encrypts the key with AES-256-GCM (local, no KMS), and stores the ciphertext in the `encrypted_keys` SQLite table with `kms_key_id = "dryrun-local-aes256"`.
+
+4. **Key storage/retrieval** — `encryptAndStore()` and `retrieveAndDecrypt()` in `aws-kms.ts` check `isDryRun()` at the top. If true, they delegate to `dry-run/wallet.ts` which uses `dry-run/crypto.ts` — never touching AWS.
+
+5. **Payment execution** — `sendEth()`, `sendErc20()`, and `executeWeb2Payment()` detect dry-run and call the appropriate stub from `dry-run/stubs.ts`. Stubs simulate latency, return fake tx hashes / order IDs, and respect the `stub_mode` setting (`success` / `failure` / `random`).
+
+6. **Policy engine runs normally** — even in dry-run, all policy checks and human confirmation flows work identically. This lets you demo the full compliance flow.
+
+7. **Demo command** — `openclaw-payment demo` forces dry-run on, runs 6 sample payments covering all gateways and an over-limit scenario, and prints results:
+
+```bash
+openclaw-payment demo --stub-mode random
+```
+
+### Enabling Dry-Run
+
+**Option 1 — YAML configuration:**
+```yaml
+dry_run:
+  enabled: true
+  encryption_key_env: "DRYRUN_ENCRYPTION_KEY"
+  stub_mode: "success"        # "success" | "failure" | "random"
+  simulated_latency_ms: 500   # fake network delay
+```
+
+**Option 2 — CLI flag (overrides YAML):**
+```bash
+openclaw-payment --dry-run pay \
+  --protocol x402 --amount 5 --currency USDC \
+  --to 0x742d35Cc6635C0532925a3b844Bc9e7595f2bD65 --network base
+```
+
+**Option 3 — Demo command (always forces dry-run):**
+```bash
+openclaw-payment demo
+openclaw-payment demo --stub-mode random
+openclaw-payment demo --stub-mode failure
+```
+
+### Encryption Key Lifecycle
+
+```
+First run (DRYRUN_ENCRYPTION_KEY not set)
+    │
+    ├─ Generate random 256-bit key
+    ├─ Write to .env:  DRYRUN_ENCRYPTION_KEY=<64 hex chars>
+    ├─ Set in process.env for current session
+    │
+    ▼
+Subsequent runs
+    │
+    ├─ dotenv loads .env on startup
+    ├─ DRYRUN_ENCRYPTION_KEY is present
+    └─ Same key reuses → same wallet is decryptable
+```
+
+> **⚠️ The `.env` file is in `.gitignore`.** If you delete it, a new key is generated
+> and previously encrypted entries become unreadable. For reproducible demos, you
+> can set `DRYRUN_ENCRYPTION_KEY` to a fixed 64-char hex string.
+
+### Wallet Key Generation
+
+On bootstrap in dry-run mode, the skill:
+
+1. Calls Viem's `generatePrivateKey()` to produce a valid secp256k1 private key
+2. Encrypts it with AES-256-GCM using the local dry-run key
+3. Stores the ciphertext in the `encrypted_keys` SQLite table
+   (with `kms_key_id = "dryrun-local-aes256"`)
+4. Derives the public address via `privateKeyToAccount()` and logs it
+
+On subsequent runs, if `default_wallet` already exists in SQLite, the existing
+key is reused (decrypted locally, address re-derived).
+
+### Stub Modes
+
+| Mode | Behavior | Use Case |
+|---|---|---|
+| `success` | All simulated payments return success | Happy-path demos, integration testing |
+| `failure` | All simulated payments return failure | Error-handling demos, policy engine testing |
+| `random` | ~70% success, ~30% failure | Realistic mixed-outcome demos |
+
+Stubs also simulate configurable network latency (`simulated_latency_ms`) to
+make the demo feel realistic.
+
+### Stub Response Examples
+
+**Web3 (Viem) stub — success:**
+```json
+{
+  "txHash": "0x8f3a1b2c4d5e6f7a8b9c0d1e2f3a4b5caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "network": "base",
+  "from": "0x1234...abcd",
+  "to": "0x742d...f2bD65",
+  "amount": "5.00",
+  "currency": "USDC"
+}
+```
+
+**Stripe stub — success:**
+```json
+{
+  "gateway": "stripe",
+  "transaction_id": "pi_dryrun_a1b2c3d4e5f6",
+  "status": "success",
+  "amount": "49.99",
+  "currency": "USD"
+}
+```
+
+**PayPal stub — success:**
+```json
+{
+  "gateway": "paypal",
+  "transaction_id": "PAYPAL-DRYRUN-A1B2C3D4E5",
+  "status": "success",
+  "amount": "25.00",
+  "currency": "USD",
+  "receipt_url": "https://sandbox.paypal.com/dryrun/approval"
+}
+```
+
+**Visa Direct stub — failure (stub_mode: failure):**
+```json
+{
+  "gateway": "visa",
+  "transaction_id": "VISA-DRYRUN-1739184000000",
+  "status": "failed",
+  "amount": "100.00",
+  "currency": "USD",
+  "error": "[DRY-RUN] Visa push funds declined"
+}
+```
+
+### Demo Command
+
+The `demo` command runs 6 pre-built sample payments across all supported
+gateways and protocols:
+
+```bash
+openclaw-payment demo --stub-mode success
+```
+
+```
+🧪 ══════════════════════════════════════════════
+   AGENTIC PAYMENT SKILL — INTERACTIVE DEMO
+   Stub mode: success
+══════════════════════════════════════════════════
+
+─── 1️⃣  x402 USDC payment on Base (web3) ───
+  ✅ Success | TX: 0x8f3a1b2c...
+
+─── 2️⃣  AP2 Stripe payment (web2) ───
+  ✅ Success | ID: pi_dryrun_a1b2c3d4e5f6
+
+─── 3️⃣  AP2 PayPal payment (web2) ───
+  ✅ Success | ID: PAYPAL-DRYRUN-A1B2C3D4E5
+
+─── 4️⃣  x402 ETH transfer on Ethereum (web3) ───
+  ✅ Success | TX: 0x9c4b2d3e...
+
+─── 5️⃣  AP2 Visa Direct payment (web2) ───
+  ✅ Success | ID: VISA-DRYRUN-1739184000000
+
+─── 6️⃣  Over-limit payment (triggers policy engine) ───
+  ❌ Not executed: Payment rejected by human confirmation.
+  ⚠️  Policy: [single_transaction.max_amount_usd] Amount $99999.99 exceeds limit of $1000.00
+
+══════════════════════════════════════════════════
+  Demo complete. All transactions are in SQLite.
+  Run: openclaw-payment audit --limit 20
+══════════════════════════════════════════════════
+```
+
+After the demo, inspect the results:
+
+```bash
+# View all transactions created during the demo
+sqlite3 data/payments.db "SELECT id, protocol, gateway, amount, currency, status FROM transactions ORDER BY created_at DESC LIMIT 10;"
+
+# View the full audit trail
+openclaw-payment audit --limit 30
+
+# Check the generated wallet
+openclaw-payment keys list
+```
+
+### Dry-Run Configuration Reference
+
+```yaml
+dry_run:
+  # Master toggle. Overridden by --dry-run CLI flag.
+  enabled: false
+
+  # Name of the environment variable holding the 256-bit AES key
+  # (64 hex characters). If empty on first run, auto-generated
+  # and appended to .env in the project root.
+  encryption_key_env: "DRYRUN_ENCRYPTION_KEY"
+
+  # How stubs behave:
+  #   "success" — all stubs return successful responses
+  #   "failure" — all stubs return error responses
+  #   "random"  — ~70% success, ~30% failure (randomized)
+  stub_mode: "success"
+
+  # Simulated network latency in milliseconds.
+  # Set to 0 for instant responses (useful in tests).
+  simulated_latency_ms: 500
+```
+
+### Dry-Run Audit Actions
+
+In dry-run mode, audit log entries use `dryrun_*` action prefixes so they are
+easily distinguishable from production entries:
+
+| Action | Trigger |
+|---|---|
+| `dryrun_mode_activated` | On bootstrap when dry-run is enabled |
+| `dryrun_wallet_generated` | New wallet key generated and stored |
+| `dryrun_key_stored` | Any key/token encrypted with local AES |
+| `dryrun_key_decrypted` | Key retrieved and decrypted locally |
+| `dryrun_eth_transfer` | Simulated ETH transfer |
+| `dryrun_erc20_transfer` | Simulated ERC-20 transfer |
+| `dryrun_stripe` | Simulated Stripe payment |
+| `dryrun_paypal` | Simulated PayPal payment |
+| `dryrun_visa` | Simulated Visa Direct payment |
+| `dryrun_mastercard` | Simulated Mastercard Send payment |
+| `dryrun_web2_executed` | Web2 payment stub completed |
+| `dryrun_web3_confirmed` | Web3 tx stub confirmed |
+
+### Quick Start (Zero Setup Demo)
+
+Run the entire skill with **zero AWS credentials and zero payment gateway accounts**:
+
+```bash
+# 1. Clone and install
+git clone https://github.com/sentient-agi/openclaw-payment-skill.git
+cd openclaw-payment-skill
+npm install
+npm run build
+
+# 2. Run the demo (no env vars needed — key auto-generates)
+npx openclaw-payment demo
+
+# 3. Try individual payments
+npx openclaw-payment --dry-run pay \
+  --protocol x402 --amount 10 --currency USDC \
+  --to 0x742d35Cc6635C0532925a3b844Bc9e7595f2bD65 --network base
+
+npx openclaw-payment --dry-run pay \
+  --protocol ap2 --amount 29.99 --currency USD \
+  --to merchant-test --gateway stripe
+
+# 4. Trigger a policy violation (default limit is $1000)
+npx openclaw-payment --dry-run pay \
+  --protocol ap2 --amount 5000 --currency USD \
+  --to big-purchase --gateway paypal
+
+# 5. Inspect results
+npx openclaw-payment --dry-run audit --limit 20
+npx openclaw-payment --dry-run keys list
+
+# 6. Start the web API in dry-run
+npx openclaw-payment --dry-run &  # or set dry_run.enabled: true in YAML
+curl http://localhost:3402/api/v1/health
+curl -X POST http://localhost:3402/api/v1/payment \
+  -H "Content-Type: application/json" \
+  -d '{"protocol":"x402","action":"pay","amount":"5","currency":"USDC","recipient":"0x742d35Cc6635C0532925a3b844Bc9e7595f2bD65","network":"base"}'
+```
 
 ---
 
