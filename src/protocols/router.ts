@@ -15,7 +15,7 @@ export const PaymentIntentSchema = z.object({
   recipient: z.string().min(1),
   network: z.string().optional().nullable(),
   gateway: z
-    .enum(["viem", "visa", "mastercard", "paypal", "stripe"])
+    .enum(["viem", "visa", "mastercard", "paypal", "stripe", "googlepay", "applepay"])
     .optional()
     .nullable(),
   description: z.string().optional(),
