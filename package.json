@@ -1,6 +1,6 @@
 {
   "name": "openclaw-payment-skill",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OpenClaw agentic payment skill with x402 and AP2 protocol support",
   "main": "dist/index.js",
   "bin": {
