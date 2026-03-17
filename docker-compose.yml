@@ -1,0 +1,77 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# docker-compose.yml — OpenClaw + Agentic Payment Skill
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+  openclaw-payments:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-payments
+    restart: unless-stopped
+
+    ports:
+      - "${PAYMENT_API_PORT:-3402}:3402"        # Payment skill web API
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"  # OpenClaw gateway
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"   # OpenClaw bridge
+
+    environment:
+      # ── AWS KMS (required for production, ignored in dry-run) ───────
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - AWS_KMS_KEY_ID=${AWS_KMS_KEY_ID:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+
+      # ── OpenClaw ────────────────────────────────────────────────────
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+
+      # ── Payment Skill ──────────────────────────────────────────────
+      - CONFIG_PATH=${CONFIG_PATH:-config/default.yaml}
+      - DRY_RUN=${DRY_RUN:-false}
+      - DRYRUN_ENCRYPTION_KEY=${DRYRUN_ENCRYPTION_KEY:-}
+
+    volumes:
+      # Persist payment skill data (SQLite DB, logs)
+      - payment-data:/app/agent-payments-skill/data
+      - payment-logs:/app/agent-payments-skill/logs
+      # Persist OpenClaw config and workspace
+      - openclaw-config:/home/openclaw/.openclaw
+      # Optional: mount a custom YAML config
+      # - ./config/production.yaml:/app/agent-payments-skill/config/default.yaml:ro
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3402/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── CLI helper container (for admin / one-off commands) ──────────────
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-payments-cli
+    profiles: ["cli"]  # only starts with: docker compose run cli ...
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_KMS_KEY_ID=${AWS_KMS_KEY_ID:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - CONFIG_PATH=${CONFIG_PATH:-config/default.yaml}
+      - DRY_RUN=${DRY_RUN:-false}
+      - DRYRUN_ENCRYPTION_KEY=${DRYRUN_ENCRYPTION_KEY:-}
+    volumes:
+      - payment-data:/app/agent-payments-skill/data
+      - payment-logs:/app/agent-payments-skill/logs
+      - openclaw-config:/home/openclaw/.openclaw
+    working_dir: /app/agent-payments-skill
+    entrypoint: ["node", "dist/cli.js"]
+
+volumes:
+  payment-data:
+  payment-logs:
+  openclaw-config:
