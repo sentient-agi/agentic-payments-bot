@@ -102,8 +102,19 @@ const ConfigSchema = z.object({
   }),
   kms: z.object({
     enabled: z.boolean(),
-    region: z.string(),
-    key_id_env: z.string(),
+    provider: z
+      .enum(["aws-kms", "os-keyring", "dbus-secret", "gpg", "local-aes"])
+      .default("aws-kms"),
+    region: z.string().optional().default("us-east-1"),
+    key_id_env: z.string().optional().default("AWS_KMS_KEY_ID"),
+    // Linux-specific: which library to use for os-keyring provider
+    linux_keyring_backend: z
+      .enum(["keytar", "dbus-next"])
+      .optional()
+      .default("keytar"),
+    // GnuPG provider settings
+    gpg_key_id: z.string().optional(),   // GPG key fingerprint or email
+    gpg_binary: z.string().optional().default("gpg2"),  // path to gpg binary
   }),
   policy: z.object({
     enabled: z.boolean(),
