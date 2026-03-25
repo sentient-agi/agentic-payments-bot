@@ -34,7 +34,16 @@
   - [Web2 — Google Pay](#web2--google-pay)
   - [Web2 — Apple Pay](#web2--apple-pay)
 - [Security](#security)
-  - [AWS KMS Integration](#aws-kms-integration)
+  - [KMS Provider System](#kms-provider-system)
+    - [Provider Overview](#provider-overview)
+    - [Provider Selection Logic](#provider-selection-logic)
+    - [AWS KMS Provider](#aws-kms-provider)
+    - [OS Keyring Provider](#os-keyring-provider)
+    - [D-Bus Secret Service Provider](#d-bus-secret-service-provider)
+    - [GnuPG Provider](#gnupg-provider)
+    - [Local AES Provider](#local-aes-provider)
+    - [Provider Comparison Matrix](#provider-comparison-matrix)
+    - [Headless Fallback Behavior](#headless-fallback-behavior)
   - [Encrypted Key Storage (SQLite)](#encrypted-key-storage-sqlite)
   - [Environment Variables](#environment-variables)
 - [Policy Engine](#policy-engine)
@@ -102,7 +111,7 @@ payment rails.
 | **Dual protocol support** | x402 (HTTP 402 + onchain settlement) and AP2 (Google's mandate-based agent payments) |
 | **Web3 transactions** | Ethereum, Base, Polygon via [Viem](https://viem.sh) — native ETH and ERC-20 (USDC, etc.) |
 | **Web2 gateways** | Stripe, PayPal, Visa Direct, Mastercard Send, Google Pay, Apple Pay |
-| **Key management** | AWS KMS encryption/decryption; encrypted at-rest storage in SQLite |
+| **Key management** | Pluggable KMS providers: AWS KMS, OS Keyring (KDE Wallet / GNOME Keyring / macOS Keychain / Windows Credential Manager), D-Bus Secret Service, GnuPG, Local AES-256-GCM |
 | **Policy engine** | Per-tx limits, daily/weekly/monthly aggregates, time-of-day, blacklist/whitelist, currency restrictions |
 | **Human-in-the-loop** | Automatic escalation on policy violations via CLI prompt, chat prompt, or web API |
 | **Audit trail** | Every action logged to SQLite `audit_log` table + Winston (stdout/stderr/file) |
@@ -116,52 +125,55 @@ payment rails.
 ### System Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                        Agent Payments Skill                        │
-│  ┌───────────┐   ┌───────────────┐   ┌──────────┐                  │
-│  │  Chat UI  │   │   CLI (term)  │   │ Web API  │                  │
-│  └─────┬─────┘   └───────┬───────┘   └────┬─────┘                  │
-│        │                 │                │                        │
-│        ▼                 ▼                ▼                        │
-│  ┌─────────────────────────────────────────────────┐               │
-│  │              Protocol Router                    │               │
-│  │  (AI output parser → PaymentIntent → routing)   │               │
-│  └───────────┬─────────────────┬───────────────────┘               │
-│              │                 │                                   │
-│     ┌────────▼──────┐  ┌──────▼────────┐                           │
-│     │  x402 Client  │  │  AP2 Client   │                           │
-│     │  (HTTP 402)   │  │  (Mandates)   │                           │
-│     └────────┬──────┘  └──────┬────────┘                           │
-│              │                │                                    │
-│  ┌───────────▼────────────────▼───────────────┐                    │
-│  │            Policy Engine                   │                    │
-│  │  (compliance checks before execution)      │                    │
-│  │  ┌──────────────────────────────────────┐  │                    │
-│  │  │ • Single tx limit    • Blacklist     │  │                    │
-│  │  │ • Daily/Weekly/Mo    • Whitelist     │  │                    │
-│  │  │ • Time-of-day        • Currency      │  │                    │
-│  │  └──────────────────────────────────────┘  │                    │
-│  │       │ (violation?) ──► Human Confirm     │                    │
-│  └───────┼────────────────────────────────────┘                    │
-│          │                                                         │
-│  ┌───────▼──────────────────────────────────────────┐              │
-│  │              Payment Execution                   │              │
-│  │  ┌──────────┐  ┌────────┐  ┌────────┐  ┌──────┐  │              │
-│  │  │  Viem    │  │ Stripe │  │ PayPal │  │ Visa │  │   ┌────────┐ │
-│  │  │ (ETH/    │  │        │  │        │  │ MC   │  │   │AWS KMS │ │
-│  │  │  ERC20)  │  │        │  │        │  │ GPay │  │   │(decrypt│ │
-│  │  └──────────┘  └────────┘  └────────┘  │ APay │  │◄──│ keys)  │ │
-│  │                                        └──────┘  │   └────────┘ │
-│  └──────────────────┬───────────────────────────────┘              │
-│                     │                                              │
-│  ┌──────────────────▼───────────────────────────────┐              │
-│  │                  SQLite                          │              │
-│  │  ┌──────────────┐  ┌──────────┐  ┌────────────┐  │              │
-│  │  │encrypted_keys│  │ transac- │  │ audit_log  │  │              │
-│  │  │              │  │ tions    │  │            │  │              │
-│  │  └──────────────┘  └──────────┘  └────────────┘  │              │
-│  └──────────────────────────────────────────────────┘              │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Agent Payments Skill                            │
+│  ┌───────────┐   ┌───────────────┐   ┌──────────┐                        │
+│  │  Chat UI  │   │   CLI (term)  │   │ Web API  │                        │
+│  └─────┬─────┘   └───────┬───────┘   └────┬─────┘                        │
+│        │                 │                │                              │
+│        ▼                 ▼                ▼                              │
+│  ┌─────────────────────────────────────────────────┐                     │
+│  │              Protocol Router                    │                     │
+│  │  (AI output parser → PaymentIntent → routing)   │                     │
+│  └───────────┬─────────────────┬───────────────────┘                     │
+│              │                 │                                         │
+│     ┌────────▼──────┐  ┌──────▼────────┐                                 │
+│     │  x402 Client  │  │  AP2 Client   │                                 │
+│     │  (HTTP 402)   │  │  (Mandates)   │                                 │
+│     └────────┬──────┘  └──────┬────────┘                                 │
+│              │                │                                          │
+│  ┌───────────▼────────────────▼───────────────┐                          │
+│  │            Policy Engine                   │                          │
+│  │  (compliance checks before execution)      │                          │
+│  │  ┌──────────────────────────────────────┐  │                          │
+│  │  │ • Single tx limit    • Blacklist     │  │                          │
+│  │  │ • Daily/Weekly/Mo    • Whitelist     │  │                          │
+│  │  │ • Time-of-day        • Currency      │  │                          │
+│  │  └──────────────────────────────────────┘  │                          │
+│  │       │ (violation?) ──► Human Confirm     │                          │
+│  └───────┼────────────────────────────────────┘                          │
+│          │                                                               │
+│  ┌───────▼──────────────────────────────────────────┐                    │
+│  │              Payment Execution                   │                    │
+│  │  ┌──────────┐  ┌────────┐  ┌────────┐  ┌──────┐  │ ┌───────────────┐  │
+│  │  │  Viem    │  │ Stripe │  │ PayPal │  │ Visa │  │ │  KMS Provider │  │
+│  │  │ (ETH/    │  │        │  │        │  │ MC   │  │ │ ┌───────────┐ │  │
+│  │  │  ERC20)  │  │        │  │        │  │ GPay │  │ │ │ AWS KMS   │ │  │
+│  │  └──────────┘  └────────┘  └────────┘  │ APay │  │ │ │ OS Keyring│ │  │
+│  │                                        └──────┘  │ │ │ D-Bus SS  │ │  │
+│  │                                                  │◄│ │ GnuPG     │ │  │
+│  │                                                  │ │ │ Local AES │ │  │
+│  │                                                  │ │ └───────────┘ │  │
+│  └──────────────────┬───────────────────────────────┘ └───────────────┘  │
+│                     │                                                    │
+│  ┌──────────────────▼───────────────────────────────┐                    │
+│  │                  SQLite                          │                    │
+│  │  ┌──────────────┐  ┌──────────┐  ┌────────────┐  │                    │
+│  │  │encrypted_keys│  │ transac- │  │ audit_log  │  │                    │
+│  │  │              │  │ tions    │  │            │  │                    │
+│  │  └──────────────┘  └──────────┘  └────────────┘  │                    │
+│  └──────────────────────────────────────────────────┘                    │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Directory Structure
@@ -191,9 +203,16 @@ agent-payments-skill/
 │   │   ├── web3/
 │   │   │   └── ethereum.ts           # Viem-based ETH/ERC-20 tx producer
 │   │   └── web2/
-│   │       └── gateways.ts           # Stripe, PayPal, Visa, Mastercard, Google Pay, Apple Pay
+│   │       └── gateways.ts           # Stripe, PayPal, Visa, MasterCard, Google Pay, Apple Pay
 │   ├── kms/
-│   │   └── aws-kms.ts               # AWS KMS encrypt/decrypt (delegates to dry-run when enabled)
+│   │   ├── provider.ts               # KmsProvider interface (shared contract)
+│   │   ├── factory.ts                # Provider factory (selects backend from config)
+│   │   ├── aws-kms.ts                # Public API: encryptAndStore / retrieveAndDecrypt
+│   │   ├── aws-kms-provider.ts       # AWS KMS provider implementation
+│   │   ├── os-keyring-provider.ts    # OS Keyring via @aspect-build/keytar
+│   │   ├── dbus-secret-service-provider.ts  # Linux D-Bus Secret Service (dbus-next)
+│   │   ├── gpg-provider.ts           # GnuPG encryption for headless Linux
+│   │   └── local-aes-provider.ts     # Local AES-256-GCM (fallback / dry-run)
 │   ├── dry-run/
 │   │   ├── crypto.ts                 # Local AES-256-GCM encryption (no KMS)
 │   │   ├── stubs.ts                  # Gateway stub responses (success/failure/random)
@@ -529,50 +548,387 @@ validation and payment token processing.
 
 ## Security
 
-### AWS KMS Integration
+The skill uses a **pluggable KMS (Key Management System) provider** architecture
+for all secret management. Every sensitive credential — web3 wallet private keys
+(Viem), API tokens (Stripe, PayPal, Visa, Mastercard, Google Pay, Apple Pay), and
+authentication secrets — flows through a single pair of functions:
 
-All sensitive credentials (wallet private keys, API tokens, passwords) are encrypted using
-[AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html) before storage
-and decrypted only at the moment of use.
-
-**Important:** AWS access credentials are **only** loaded from environment variables. They are
-never stored in configuration files or the database.
-
-| Operation | Description |
+| Function | Description |
 |---|---|
-| `encryptAndStore()` | Encrypts plaintext via `KMS.Encrypt`, stores ciphertext blob in SQLite |
-| `retrieveAndDecrypt()` | Reads ciphertext from SQLite, decrypts via `KMS.Decrypt`, returns plaintext |
+| `encryptAndStore(keyAlias, keyType, plaintext)` | Encrypt and persist a secret |
+| `retrieveAndDecrypt(keyAlias)` | Fetch and decrypt a secret for use |
 
-**Plaintext values are never logged or persisted.** The audit log records the key alias and
-type, but never the decrypted value.
+All payment consumers (`ethereum.ts`, `gateways.ts`, `cli.ts`) call these same
+two functions regardless of which KMS backend is active. **Plaintext values are
+never logged or persisted.**
+
+### KMS Provider System
+
+#### Provider Overview
+
+The `kms.provider` configuration field selects which backend handles secret
+encryption and storage:
+
+| Provider | Config Value | Description | Platforms |
+|---|---|---|---|
+| **AWS KMS** | `aws-kms` | Cloud HSM-backed encryption via AWS Key Management Service. Ciphertext stored in SQLite. | All (requires AWS credentials) |
+| **OS Keyring** | `os-keyring` | OS-native keyring integration via [`@aspect-build/keytar`](https://github.com/nicolo-ribaudo/keytar). Secrets stored in the platform's native credential store. | Linux (KDE Wallet / GNOME Keyring), macOS (Keychain), Windows (Credential Manager) |
+| **D-Bus Secret Service** | `dbus-secret` | Linux-only pure JavaScript client for the [freedesktop.org Secret Service API](https://specifications.freedesktop.org/secret-service/) via [`dbus-next`](https://github.com/dbusjs/node-dbus-next). No native compilation required. | Linux (GNOME Keyring, KDE Wallet with Secret Service bridge) |
+| **GnuPG** | `gpg` | Asymmetric encryption via `gpg2` CLI. Ideal for headless Linux servers without a desktop session. Ciphertext stored in SQLite. | Linux, macOS, Windows (gpg4win) |
+| **Local AES** | `local-aes` | Local AES-256-GCM symmetric encryption. Key sourced from an environment variable (auto-generated if missing). Ciphertext stored in SQLite. | All (zero external dependencies) |
+
+#### Provider Selection Logic
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                     KMS Provider Selection Logic                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  config.kms.provider = ?                                                 │
+│  ┌──────────────────┬───────────────────────────────────────────────────┐│
+│  │ "aws-kms"        │ AwsKmsProvider                                    ││
+│  │                  │ → AWS KMS encrypt/decrypt + SQLite ciphertext     ││
+│  ├──────────────────┼───────────────────────────────────────────────────┤│
+│  │ "os-keyring"     │ if Linux:                                         ││
+│  │                  │   linux_keyring_backend = "keytar"?               ││
+│  │                  │     → OsKeyringProvider (@aspect-build/keytar)    ││
+│  │                  │   linux_keyring_backend = "dbus-next"?            ││
+│  │                  │     → DbusSecretServiceProvider (dbus-next)       ││
+│  │                  │ if macOS / Windows:                               ││
+│  │                  │     → OsKeyringProvider (@aspect-build/keytar)    ││
+│  │                  │ ⚠ auto-fallback → LocalAesProvider if headless    ││
+│  ├──────────────────┼───────────────────────────────────────────────────┤│
+│  │ "dbus-secret"    │ DbusSecretServiceProvider (dbus-next, Linux only) ││
+│  │                  │ ⚠ auto-fallback → LocalAesProvider if headless    ││
+│  ├──────────────────┼───────────────────────────────────────────────────┤│
+│  │ "gpg"            │ GpgProvider (gpg2 CLI)                            ││
+│  │                  │ → GPG encrypt/decrypt + SQLite ciphertext         ││
+│  │                  │ Requires gpg_key_id in config                     ││
+│  ├──────────────────┼───────────────────────────────────────────────────┤│
+│  │ "local-aes"      │ LocalAesProvider                                  ││
+│  │                  │ → AES-256-GCM + SQLite ciphertext                 ││
+│  │                  │ Key from env var (auto-generated if missing)      ││
+│  └──────────────────┴───────────────────────────────────────────────────┘│
+│                                                                          │
+│  dry_run.enabled = true?                                                 │
+│  → Always uses local AES (bypasses provider entirely)                    │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+#### AWS KMS Provider
+
+Uses [AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html)
+for HSM-backed encryption. Ciphertext blobs are stored in the `encrypted_keys`
+SQLite table.
+
+**Configuration:**
+```yaml
+kms:
+  enabled: true
+  provider: "aws-kms"
+  region: "us-east-1"
+  key_id_env: "AWS_KMS_KEY_ID"
+```
+
+**Required environment variables:**
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_KMS_KEY_ID` (KMS key ARN or alias)
+- `AWS_SESSION_TOKEN` (optional, for temporary credentials)
+
+**Important:** AWS credentials are **only** loaded from environment variables.
+They are never stored in configuration files or the database.
+
+#### OS Keyring Provider
+
+Integrates with the operating system's native credential store using
+[`@aspect-build/keytar`](https://github.com/nicolo-ribaudo/keytar) (a maintained
+fork of Atom's `keytar`). Secrets are managed directly by the OS — no ciphertext
+is stored in SQLite.
+
+| Platform | Backend | Notes |
+|---|---|---|
+| **Linux (KDE)** | KDE Wallet (KWallet) | Accessed via D-Bus `org.kde.KWallet` or Secret Service bridge |
+| **Linux (GNOME)** | GNOME Keyring | Accessed via D-Bus `org.freedesktop.secrets` |
+| **macOS** | Keychain (`Security.framework`) | Transparent integration |
+| **Windows** | Credential Manager (DPAPI) | Transparent integration |
+
+**Configuration (Linux with keytar):**
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  linux_keyring_backend: "keytar"   # native addon
+```
+
+**Configuration (Linux with dbus-next, no native compilation):**
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  linux_keyring_backend: "dbus-next"   # pure JS
+```
+
+**Configuration (macOS / Windows):**
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  # linux_keyring_backend is ignored on non-Linux
+```
+
+> **Note:** `@aspect-build/keytar` is a **native Node.js addon** (C++ / N-API)
+> and requires compilation or prebuilt binaries. If you want to avoid native
+> compilation on Linux, use `linux_keyring_backend: "dbus-next"` or the
+> `dbus-secret` provider directly.
+
+**KDE Wallet compatibility check:**
+
+Ensure the Secret Service API is available on your KDE system:
+```bash
+dbus-send --session --print-reply \
+  --dest=org.freedesktop.secrets \
+  /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping
+```
+If this fails, enable the KDE Wallet Secret Service integration in
+**System Settings → KDE Wallet → Secret Service integration**.
+
+#### D-Bus Secret Service Provider
+
+A **pure JavaScript** (zero native compilation) provider that communicates
+directly with the [freedesktop.org Secret Service API](https://specifications.freedesktop.org/secret-service/)
+over D-Bus using [`dbus-next`](https://github.com/dbusjs/node-dbus-next).
+
+Works with:
+- **GNOME Keyring** (native Secret Service provider)
+- **KDE Wallet** (via its Secret Service bridge — `kwalletd5`/`kwalletd6`)
+
+**Configuration:**
+```yaml
+kms:
+  enabled: true
+  provider: "dbus-secret"
+```
+
+This provider can also be selected indirectly:
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  linux_keyring_backend: "dbus-next"   # routes to D-Bus Secret Service
+```
+
+> **Linux-only.** This provider is not available on macOS or Windows.
+
+#### GnuPG Provider
+
+Uses [GnuPG](https://gnupg.org/) (`gpg2`) for asymmetric encryption. Ideal
+for **headless Linux servers** and CI/CD environments that have no desktop
+session, no D-Bus, and no AWS credentials — but do have a GPG keypair.
+
+Secrets are encrypted with the public key and stored as ASCII-armored ciphertext
+in the `encrypted_keys` SQLite table. Decryption uses the corresponding private
+key from the local GPG keyring. If the private key has a passphrase, `gpg-agent`
+handles the prompt.
+
+**Configuration:**
+```yaml
+kms:
+  enabled: true
+  provider: "gpg"
+  gpg_key_id: "agent-payments@yourcompany.com"   # fingerprint or email
+  gpg_binary: "gpg2"                             # path to gpg binary
+```
+
+**Setup — generate a dedicated GPG keypair:**
+```bash
+# Generate a key (non-interactive)
+gpg2 --batch --gen-key <<EOF
+Key-Type: RSA
+Key-Length: 4096
+Subkey-Type: RSA
+Subkey-Length: 4096
+Name-Real: Agent Payments
+Name-Email: agent-payments@yourcompany.com
+Expire-Date: 2y
+%no-protection
+%commit
+EOF
+
+# Verify it was created
+gpg2 --list-keys agent-payments@yourcompany.com
+```
+
+**For Docker / CI:** Import the key at container startup:
+```bash
+echo "$GPG_PRIVATE_KEY_BASE64" | base64 -d | gpg2 --batch --import
+```
+
+#### Local AES Provider
+
+Symmetric AES-256-GCM encryption using a 256-bit key from an environment
+variable. Ciphertext stored in SQLite. This is the simplest provider — zero
+external dependencies, works everywhere.
+
+**Configuration:**
+```yaml
+kms:
+  enabled: true
+  provider: "local-aes"
+```
+
+The encryption key is read from the `DRYRUN_ENCRYPTION_KEY` environment variable
+(64 hex characters = 256 bits). If the variable is missing on first run, a
+random key is auto-generated and appended to the `.env` file.
+
+> **⚠️ Guard the `.env` file carefully.** If you lose the encryption key,
+> previously encrypted entries become unreadable. The `.env` file is in
+> `.gitignore` by default.
+
+#### Example Configurations
+
+##### Desktop Linux (KDE) with keytar:
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  linux_keyring_backend: "keytar"
+```
+
+##### Desktop Linux (GNOME) with dbus-next (no native compilation):
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+  linux_keyring_backend: "dbus-next"
+```
+
+##### Headless Linux server (GPG):
+```yaml
+kms:
+  enabled: true
+  provider: "gpg"
+  gpg_key_id: "agent-payments@yourcompany.com"
+  gpg_binary: "gpg2"
+```
+
+##### Headless Linux / Docker (local AES):
+```yaml
+kms:
+  enabled: true
+  provider: "local-aes"
+```
+
+##### macOS / Windows desktop:
+```yaml
+kms:
+  enabled: true
+  provider: "os-keyring"
+```
+
+##### Production cloud:
+```yaml
+kms:
+  enabled: true
+  provider: "aws-kms"
+  region: "us-east-1"
+  key_id_env: "AWS_KMS_KEY_ID"
+```
+
+#### Provider Comparison Matrix
+
+| | AWS KMS | OS Keyring | D-Bus Secret Service | GnuPG | Local AES |
+|---|---|---|---|---|---|
+| **Encryption** | AES-256 (HSM-backed) | OS-managed (DPAPI / Keychain / kernel) | Same as OS Keyring | RSA/ECC asymmetric | AES-256-GCM |
+| **At-rest storage** | SQLite (ciphertext) | OS keyring DB | OS keyring DB | SQLite (ciphertext) | SQLite (ciphertext) |
+| **Key custody** | AWS (cloud HSM) | OS user session | OS user session | Local GPG keyring | Env var / `.env` file |
+| **Headless server** | ✅ | ❌ (needs D-Bus session) | ❌ (needs D-Bus session) | ✅ | ✅ |
+| **Native addon required** | No | Yes (`keytar`) | No (pure JS) | No (CLI) | No |
+| **Linux (KDE)** | ✅ | ✅ (KWallet) | ✅ (KWallet bridge) | ✅ | ✅ |
+| **Linux (GNOME)** | ✅ | ✅ (gnome-keyring) | ✅ (gnome-keyring) | ✅ | ✅ |
+| **macOS** | ✅ | ✅ (Keychain) | ❌ | ✅ | ✅ |
+| **Windows** | ✅ | ✅ (Credential Manager) | ❌ | ✅ (gpg4win) | ✅ |
+| **Docker / CI** | ✅ | ❌ | ❌ | ✅ (import keyring) | ✅ |
+| **Web3 private key** | ✅ (66 bytes) | ✅ | ✅ | ✅ | ✅ |
+| **API tokens** | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+#### Security Comparison
+
+| | AWS KMS | OS Keyring | D-Bus Secret Service | GPG | Local AES |
+|---|---|---|---|---|---|
+| **Encryption** | AES-256 (HSM-backed) | OS-managed (DPAPI/Keychain/kernel) | Same as OS Keyring | RSA/ECC asymmetric | AES-256-GCM |
+| **At-rest storage** | SQLite (ciphertext) | OS keyring DB | OS keyring DB | SQLite (ciphertext) | SQLite (ciphertext) |
+| **Key custody** | AWS (cloud HSM) | OS user session | OS user session | Local GPG keyring | Env var / .env file |
+| **Headless server** | ✅ | ❌ (needs D-Bus) | ❌ (needs D-Bus) | ✅ | ✅ |
+| **Native addon** | No | Yes (keytar) | No (pure JS) | No (CLI) | No |
+| **Linux KDE** | ✅ | ✅ (KWallet) | ✅ (KWallet bridge) | ✅ | ✅ |
+| **Linux GNOME** | ✅ | ✅ (gnome-keyring) | ✅ (gnome-keyring) | ✅ | ✅ |
+| **macOS** | ✅ | ✅ (Keychain) | ❌ | ✅ | ✅ |
+| **Windows** | ✅ | ✅ (Credential Mgr) | ❌ | ✅ (gpg4win) | ✅ |
+| **Docker/CI** | ✅ | ❌ | ❌ | ✅ (if keyring imported) | ✅ |
+
+#### Headless Fallback Behavior
+
+The **OS Keyring** and **D-Bus Secret Service** providers are designed for
+desktop environments with an active user session. When running on a headless
+server (no X11 / Wayland, no D-Bus session bus), these providers will
+**automatically fall back** to the Local AES provider.
+
+The fallback is logged and audited:
+```
+[warn] OS keyring unavailable (headless or missing D-Bus session).
+       Falling back to local-aes provider.
+```
+
+This means you can safely set `provider: "os-keyring"` in your default config
+and deploy to both desktop and server environments — the skill will
+adapt automatically.
+
+**Recommended per-environment configuration:**
+
+| Environment | Recommended Provider |
+|---|---|
+| **Developer desktop (Linux KDE/GNOME)** | `os-keyring` (with `linux_keyring_backend: "keytar"` or `"dbus-next"`) |
+| **Developer desktop (macOS)** | `os-keyring` |
+| **Developer desktop (Windows)** | `os-keyring` |
+| **Production cloud (AWS)** | `aws-kms` |
+| **Headless Linux server (with GPG)** | `gpg` |
+| **Headless Linux / Docker (simple)** | `local-aes` |
+| **CI/CD pipeline** | `local-aes` or `aws-kms` |
 
 ### Encrypted Key Storage (SQLite)
 
-The `encrypted_keys` table stores AWS KMS-encrypted blobs:
+For providers that store ciphertext (AWS KMS, GnuPG, Local AES), the
+`encrypted_keys` table holds the encrypted blobs:
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | TEXT PK | UUID |
 | `key_type` | TEXT | `web3_private_key`, `stripe_token`, `paypal_token`, `visa_token`, `mastercard_token`, `googlepay_token`, `applepay_token` |
 | `key_alias` | TEXT UNIQUE | Human-readable name (e.g., `default_wallet`, `stripe_api_key`) |
-| `ciphertext` | BLOB | AWS KMS encrypted payload |
-| `kms_key_id` | TEXT | KMS key ARN used for encryption |
+| `ciphertext` | BLOB | Encrypted payload |
+| `kms_key_id` | TEXT | Provider identifier: KMS key ARN, `gpg:<key_id>`, `local-aes256`, or `dryrun-local-aes256` |
 | `created_at` | TEXT | ISO 8601 timestamp |
 | `updated_at` | TEXT | ISO 8601 timestamp |
 
+> **Note:** The OS Keyring and D-Bus Secret Service providers store secrets
+> directly in the OS credential store and do **not** use the `encrypted_keys`
+> SQLite table.
+
 ### Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `AWS_ACCESS_KEY_ID` | ✅ | AWS IAM access key for KMS |
-| `AWS_SECRET_ACCESS_KEY` | ✅ | AWS IAM secret key for KMS |
-| `AWS_SESSION_TOKEN` | ❌ | Optional, for temporary credentials / STS |
-| `AWS_KMS_KEY_ID` | ✅ | KMS key ARN or alias (e.g., `alias/agent-payments`) |
-| `AWS_REGION` | ❌ | Overrides `kms.region` in config (fallback: config value) |
-| `CONFIG_PATH` | ❌ | Override default config file path (for web API) |
+| Variable | Required | Provider | Description |
+|---|---|---|---|
+| `AWS_ACCESS_KEY_ID` | ✅ (for `aws-kms`) | `aws-kms` | AWS IAM access key for KMS |
+| `AWS_SECRET_ACCESS_KEY` | ✅ (for `aws-kms`) | `aws-kms` | AWS IAM secret key for KMS |
+| `AWS_SESSION_TOKEN` | ❌ | `aws-kms` | Optional, for temporary credentials / STS |
+| `AWS_KMS_KEY_ID` | ✅ (for `aws-kms`) | `aws-kms` | KMS key ARN or alias (e.g., `alias/agent-payments`) |
+| `AWS_REGION` | ❌ | `aws-kms` | Overrides `kms.region` in config |
+| `DRYRUN_ENCRYPTION_KEY` | ❌ | `local-aes` | 256-bit hex key (64 chars). Auto-generated if missing. |
+| `CONFIG_PATH` | ❌ | All | Override default config file path (for web API) |
 
-> **⚠️  Never commit these values to source control.** Use a secrets manager, `.env` file with
-> appropriate `.gitignore`, or container environment injection.
+> **⚠️  Never commit secret values to source control.** Use a secrets manager,
+> `.env` file with appropriate `.gitignore`, or container environment injection.
 
 ---
 
@@ -785,8 +1141,12 @@ CREATE TABLE audit_log (
 
 - **Node.js** ≥ 18.x (for native `fetch`)
 - **npm** ≥ 9.x (or pnpm/yarn)
-- **AWS Account** with KMS key configured
 - **SQLite** (bundled via `better-sqlite3`, no system dependency needed)
+- **KMS backend** (one of the following):
+  - **AWS Account** with KMS key configured (for `aws-kms` provider)
+  - **Desktop session** with KDE Wallet / GNOME Keyring / macOS Keychain / Windows Credential Manager (for `os-keyring` provider)
+  - **GnuPG** keypair (for `gpg` provider on headless Linux)
+  - **Nothing** (for `local-aes` provider — zero-dependency fallback)
 
 ### Steps
 
@@ -798,19 +1158,32 @@ cd agent-payments-skill
 # 2. Install dependencies
 npm install
 
-# 3. Build TypeScript
+# 3. (Optional) Install OS keyring support
+#    @aspect-build/keytar — native addon for OS keyring (Linux/macOS/Windows)
+npm install @aspect-build/keytar --save-optional
+#    dbus-next — pure JS D-Bus client for Linux Secret Service API
+npm install dbus-next --save-optional
+
+# 4. Build TypeScript
 npm run build
 
-# 4. Set required environment variables
+# 5. Configure KMS provider in config/default.yaml (or config/production.yaml)
+#    See "KMS Provider System" section for all options.
+#
+#    For AWS KMS (default):
 export AWS_ACCESS_KEY_ID="your-aws-access-key"
 export AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
 export AWS_KMS_KEY_ID="arn:aws:kms:us-east-1:123456789012:key/your-key-id"
+#
+#    For OS Keyring — no env vars needed (just set kms.provider: "os-keyring")
+#    For Local AES — no env vars needed (key auto-generates)
+#    For GPG — set kms.provider: "gpg" and kms.gpg_key_id in YAML
 
-# 5. Customize configuration
+# 6. Customize configuration
 cp config/default.yaml config/production.yaml
 # Edit config/production.yaml with your RPC URLs, gateway settings, policy rules
 
-# 6. Store encrypted keys (first-time setup)
+# 7. Store encrypted keys (first-time setup)
 npx agent-payments keys store --alias default_wallet --type web3_private_key --value "0xYOUR_PRIVATE_KEY"
 
 npx agent-payments keys store --alias stripe_api_key --type stripe_token --value "sk_live_YOUR_STRIPE_KEY"
@@ -828,7 +1201,7 @@ npx agent-payments keys store --alias applepay_merchant_cert --type applepay_tok
 npx agent-payments keys store --alias applepay_merchant_key --type applepay_token --value "BASE64_ENCODED_KEY"
 npx agent-payments keys store --alias applepay_processor_key --type applepay_token --value "YOUR_PROCESSOR_API_KEY"
 
-# 7. Register open agents skill
+# 8. Register open agents skill
 npx skills add ./agent-payments-skill
 ```
 
@@ -1300,9 +1673,44 @@ web2:
 # NOTE: AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 # must be set as environment variables. They are NEVER read from this file.
 kms:
-  enabled: true                    # Enable AWS KMS integration
+  enabled: true                    # Enable KMS integration
+
+  # ── Provider Selection ─────────────────────────────────────────────
+  # Selects which backend handles secret encryption/storage.
+  #
+  #   "aws-kms"     — AWS KMS (production cloud). Requires AWS env vars.
+  #   "os-keyring"  — OS-native keyring: KDE Wallet / GNOME Keyring
+  #                    (Linux), Keychain (macOS), Credential Manager
+  #                    (Windows). Uses @aspect-build/keytar. Falls back
+  #                    to local-aes on headless systems without D-Bus.
+  #   "dbus-secret" — Linux-only: D-Bus Secret Service API via dbus-next
+  #                    (pure JS, no native compilation). Works with
+  #                    GNOME Keyring and KDE Wallet (Secret Service
+  #                    bridge). Falls back to local-aes on headless.
+  #   "gpg"         — GnuPG encryption. Ideal for headless Linux
+  #                    servers without D-Bus. Requires a GPG keypair.
+  #   "local-aes"   — Local AES-256-GCM. Key from DRYRUN_ENCRYPTION_KEY
+  #                    env var (auto-generated if missing). No external
+  #                    dependencies.
+  provider: "aws-kms"
+
+  # ── AWS KMS Settings (only when provider is "aws-kms") ─────────────
   region: "us-east-1"             # AWS region for KMS API calls
   key_id_env: "AWS_KMS_KEY_ID"    # Name of env var holding the KMS key ARN
+  # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from environment
+
+  # ── Linux Keyring Backend (only when provider is "os-keyring") ─────
+  # Selects the library used for OS keyring access on Linux:
+  #   "keytar"    — @aspect-build/keytar (native addon, full cross-platform)
+  #   "dbus-next" — Pure JS D-Bus Secret Service client (Linux only,
+  #                  no native compilation needed)
+  linux_keyring_backend: "keytar"
+
+  # ── GnuPG Settings (only when provider is "gpg") ──────────────────
+  # gpg_key_id: "your-fingerprint-or-email@example.com"
+  #                                # GPG key fingerprint or email. Required
+  #                                # when provider is "gpg".
+  # gpg_binary: "gpg2"            # Path to gpg binary (default: gpg2)
 
 # ── Policy Engine ────────────────────────────────────────────────────
 policy:
@@ -1408,7 +1816,7 @@ cli:
 | `protocols.ap2` | AP2 client | `mandate_issuer`, `credential_provider_url` |
 | `web3.<network>` | EVM chains | `rpc_url`, `chain_id`, `enabled` |
 | `web2.<gateway>` | Payment APIs | Gateway-specific URLs, API versions |
-| `kms` | AWS KMS | `region`, `key_id_env` (credentials from env vars only) |
+| `kms` | Key management | `provider`, `region`, `key_id_env`, `linux_keyring_backend`, `gpg_key_id`, `gpg_binary` |
 | `policy` | Compliance | All rule definitions + human confirmation toggle |
 | `logging` | Observability | Multi-transport config, audit detail level |
 | `web_api` | REST server | `host`, `port`, `cors_origins` |
@@ -2252,7 +2660,7 @@ npm run dev          # ts-node src/index.ts
 | `viem` | `^2.28.0` | Ethereum wallet, signing, tx building |
 | `stripe` | `^17.0.0` | Stripe payment SDK |
 | `@paypal/paypal-server-sdk` | `^2.0.0` | PayPal payments |
-| `@aws-sdk/client-kms` | `^3.750.0` | AWS KMS encrypt/decrypt |
+| `@aws-sdk/client-kms` | `^3.750.0` | AWS KMS encrypt/decrypt (`aws-kms` provider) |
 | `better-sqlite3` | `^11.8.0` | SQLite driver (native, synchronous) |
 | `yaml` | `^2.7.0` | YAML config parsing |
 | `express` | `^5.1.0` | Web API server |
@@ -2262,6 +2670,13 @@ npm run dev          # ts-node src/index.ts
 | `uuid` | `^11.1.0` | UUID generation for IDs |
 | `readline-sync` | `^1.4.10` | CLI interactive prompts |
 
+**Optional dependencies** (install only for the KMS providers you need):
+
+| Package | Version | Purpose | Install Command |
+|---|---|---|---|
+| `@aspect-build/keytar` | `*` | OS Keyring integration (native addon) — KDE Wallet, GNOME Keyring, macOS Keychain, Windows Credential Manager | `npm install @aspect-build/keytar --save-optional` |
+| `dbus-next` | `*` | Linux D-Bus Secret Service API (pure JS, no native compilation) | `npm install dbus-next --save-optional` |
+
 ---
 
 ## Troubleshooting
@@ -2270,7 +2685,14 @@ npm run dev          # ts-node src/index.ts
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `AWS KMS key ID not found in env var` | Missing `AWS_KMS_KEY_ID` environment variable | Export `AWS_KMS_KEY_ID` before running |
+| `AWS KMS key ID not found in env var` | Missing `AWS_KMS_KEY_ID` environment variable | Export `AWS_KMS_KEY_ID` before running, or switch to a different `kms.provider` |
+| `Unknown KMS provider: 'X'` | Invalid `kms.provider` value in config | Use one of: `aws-kms`, `os-keyring`, `dbus-secret`, `gpg`, `local-aes` |
+| `OS keyring unavailable ... Falling back to local-aes` | No D-Bus session (headless server) | Expected behavior — use `gpg` or `local-aes` provider explicitly, or install a D-Bus session |
+| `GPG provider requires 'kms.gpg_key_id'` | Missing GPG key ID in config | Set `kms.gpg_key_id` to your GPG key fingerprint or email |
+| `gpg2: command not found` | GnuPG not installed | Install `gnupg2` package, or set `kms.gpg_binary` to the correct path |
+| `D-Bus Secret Service: key not found` | Secret not stored in keyring | Store the key first via `agent-payments keys store`, or check that the correct keyring is unlocked |
+| KDE Wallet prompt on every access | KWallet locked or Secret Service bridge disabled | Unlock KDE Wallet, or enable Secret Service integration in KDE System Settings |
+| `@aspect-build/keytar` build failure | Missing C++ build tools for native addon | Install `build-essential` (Linux), Xcode CLI tools (macOS), or Visual Studio Build Tools (Windows). Or use `linux_keyring_backend: "dbus-next"` to avoid native compilation. |
 | `Encrypted key not found for alias 'X'` | Key not stored yet | Run `agent-payments keys store --alias X ...` |
 | `Network 'X' is disabled in configuration` | Chain disabled in YAML | Set `web3.X.enabled: true` in config |
 | `x402 protocol is disabled in configuration` | Protocol toggle | Set `protocols.x402.enabled: true` |
