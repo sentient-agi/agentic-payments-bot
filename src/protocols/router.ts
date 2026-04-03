@@ -15,7 +15,17 @@ export const PaymentIntentSchema = z.object({
   recipient: z.string().min(1),
   network: z.string().optional().nullable(),
   gateway: z
-    .enum(["viem", "visa", "mastercard", "paypal", "stripe", "googlepay", "applepay"])
+    .enum([
+      "viem",
+      "visa",
+      "mastercard",
+      "paypal",
+      "stripe",
+      "googlepay",
+      "applepay",
+      "x402",
+      "ap2",
+    ])
     .optional()
     .nullable(),
   description: z.string().optional(),
@@ -74,28 +84,54 @@ export function parsePaymentIntentFromAIOutput(
 
 export type ProtocolRoute = {
   protocol: "x402" | "ap2";
-  paymentType: "web3" | "web2";
+  paymentType: "web3" | "web2" | "x402" | "ap2";
   gateway: string;
 };
 
 /**
  * Decides which protocol + payment backend to use based on the parsed intent.
+ *
+ * Gateway values:
+ *   - "viem"         → direct web3 (Viem ETH/ERC-20)
+ *   - "stripe", "paypal", "visa", "mastercard", "googlepay", "applepay" → web2
+ *   - "x402"         → remote x402 resource payment (client)
+ *   - "ap2"          → remote AP2 mandate payment (client)
  */
 export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
   const config = getConfig();
   const logger = getLogger();
 
-  // Determine payment type
-  let paymentType: "web3" | "web2";
+  let paymentType: ProtocolRoute["paymentType"];
   let gateway: string;
 
+  // ── Explicit gateway override ─────────────────────────────────────────
   if (intent.gateway) {
     gateway = intent.gateway;
-    paymentType = gateway === "viem" ? "web3" : "web2";
+    if (gateway === "x402") {
+      paymentType = "x402";
+    } else if (gateway === "ap2") {
+      paymentType = "ap2";
+    } else if (gateway === "viem") {
+      paymentType = "web3";
+    } else {
+      paymentType = "web2";
+    }
   } else {
-    // Auto-detect based on protocol and currency
+    // ── Auto-detect based on protocol, currency, and recipient ──────────
     const cryptoCurrencies = ["USDC", "ETH", "WETH", "DAI", "USDT"];
-    if (
+    const isRecipientUrl =
+      intent.recipient.startsWith("http://") ||
+      intent.recipient.startsWith("https://");
+
+    if (intent.protocol === "x402" && isRecipientUrl) {
+      // Recipient is a URL → use x402 client to pay for the remote resource
+      paymentType = "x402";
+      gateway = "x402";
+    } else if (intent.protocol === "ap2" && isRecipientUrl) {
+      // Recipient is a remote AP2 endpoint → use AP2 client
+      paymentType = "ap2";
+      gateway = "ap2";
+    } else if (
       intent.protocol === "x402" ||
       cryptoCurrencies.includes(intent.currency.toUpperCase())
     ) {
