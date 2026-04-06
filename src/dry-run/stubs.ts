@@ -198,6 +198,23 @@ export async function stubX402Settlement(): Promise<X402SettlementResponse> {
   return { success: true, txHash: fakeTxHash(), network: getConfig().protocols.x402.default_network };
 }
 
+export async function stubX402RemoteAccess(resourceUrl: string): Promise<{
+  data: unknown;
+  settlement: X402SettlementResponse;
+}> {
+  await simulateLatency();
+  const settlement = await stubX402Settlement();
+  return {
+    data: {
+      dryRun: true,
+      resourceUrl,
+      message: "[DRY-RUN] Simulated x402 resource access",
+      timestamp: new Date().toISOString(),
+    },
+    settlement,
+  };
+}
+
 export async function stubAP2Payment(intent: PaymentIntent): Promise<AP2PaymentResult> {
   await simulateLatency();
   const success = shouldSucceed();
