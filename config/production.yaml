@@ -33,11 +33,28 @@ protocols:
     default_network: "base"
     default_asset: "USDC"
     timeout_ms: 30000
+    # Server-side (paywall) configuration
+    # When enabled, the web API exposes x402-protected endpoints
+    # that external agents can pay to access.
+    server:
+      enabled: true
+      # Wallet address that receives x402 payments (override via X402_PAY_TO_ADDRESS env var)
+      pay_to_address: "0x0000000000000000000000000000000000000001"
+      # Default price in asset base units (e.g. "1000000" = 1 USDC with 6 decimals)
+      default_price: "1000000"
+      default_description: "Access to premium agentic data feed"
   ap2:
     enabled: true
     mandate_issuer: "https://your-ap2-issuer.example.com"
     credential_provider_url: "https://credentials.example.com"
     timeout_ms: 30000
+    # Server-side (mandate processor) configuration
+    # When enabled, the web API exposes AP2 mandate lifecycle endpoints
+    # for external agents to submit mandates and trigger payments.
+    server:
+      enabled: true
+      # Agent ID used when this service acts as an AP2 client
+      agent_id: "openclaw-payments-agent"
 
 # Web3 Configuration
 web3:

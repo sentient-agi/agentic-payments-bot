@@ -59,12 +59,24 @@ const ConfigSchema = z.object({
       default_network: z.string(),
       default_asset: z.string(),
       timeout_ms: z.number(),
+      // Server-side (paywall) configuration
+      server: z.object({
+        enabled: z.boolean().default(false),
+        pay_to_address: z.string().default("0x0000000000000000000000000000000000000001"),
+        default_price: z.string().default("1000000"),
+        default_description: z.string().default("Access to premium agentic data feed"),
+      }).default({ enabled: false, pay_to_address: "0x0000000000000000000000000000000000000001", default_price: "1000000", default_description: "Access to premium agentic data feed" }),
     }),
     ap2: z.object({
       enabled: z.boolean(),
       mandate_issuer: z.string(),
       credential_provider_url: z.string(),
       timeout_ms: z.number(),
+      // Server-side (mandate processor) configuration
+      server: z.object({
+        enabled: z.boolean().default(false),
+        agent_id: z.string().default("openclaw-payments-agent"),
+      }).default({ enabled: false, agent_id: "openclaw-payments-agent" }),
     }),
   }),
   web3: z.record(
