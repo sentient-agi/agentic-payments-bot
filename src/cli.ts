@@ -36,9 +36,9 @@ program
   .requiredOption("--protocol <protocol>", "Protocol: x402 or ap2")
   .requiredOption("--amount <amount>", "Payment amount (decimal string)")
   .requiredOption("--currency <currency>", "Currency code (USDC, ETH, USD, EUR)")
-  .requiredOption("--to <recipient>", "Recipient address or ID")
+  .requiredOption("--to <recipient>", "Recipient address, ID, or URL")
   .option("--network <network>", "Network (ethereum, base, polygon, web2)")
-  .option("--gateway <gateway>", "Gateway (viem, stripe, paypal, visa, mastercard, googlepay, applepay)")
+  .option("--gateway <gateway>", "Gateway (viem, stripe, paypal, visa, mastercard, googlepay, applepay, x402, ap2)")
   .option("--description <desc>", "Payment description")
   .option("--wallet <alias>", "Wallet key alias in key store", "default_wallet")
   .action(async (opts) => {
@@ -69,6 +69,15 @@ program
         if (result.txHash) console.log(`   TX Hash: ${result.txHash}`);
         if (result.web2Result)
           console.log(`   Transaction ID: ${result.web2Result.transaction_id}`);
+        if (result.x402Result) {
+          console.log(`   x402 TX Hash: ${result.x402Result.txHash ?? "N/A"}`);
+          console.log(`   x402 Network: ${result.x402Result.network ?? "N/A"}`);
+        }
+        if (result.ap2Result) {
+          console.log(`   AP2 Mandate ID: ${result.ap2Result.mandate_id}`);
+          console.log(`   AP2 Transaction: ${result.ap2Result.transaction_id ?? "N/A"}`);
+          console.log(`   AP2 Status: ${result.ap2Result.status}`);
+        }
       } else {
         console.log("❌ Payment was not executed.");
         if (result.error) console.log(`   Error: ${result.error}`);
@@ -213,7 +222,7 @@ program
 
     const demos: Array<{ label: string; intent: PaymentIntent }> = [
       {
-        label: "1️⃣  x402 USDC payment on Base (web3)",
+        label: "1️⃣   x402 USDC payment on Base (web3)",
         intent: PaymentIntentSchema.parse({
           protocol: "x402",
           action: "pay",
@@ -226,7 +235,7 @@ program
         }),
       },
       {
-        label: "2️⃣  AP2 Stripe payment (web2)",
+        label: "2️⃣   AP2 Stripe payment (web2)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -239,7 +248,7 @@ program
         }),
       },
       {
-        label: "3️⃣  AP2 PayPal payment (web2)",
+        label: "3️⃣   AP2 PayPal payment (web2)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -252,7 +261,7 @@ program
         }),
       },
       {
-        label: "4️⃣  x402 ETH transfer on Ethereum (web3)",
+        label: "4️⃣   x402 ETH transfer on Ethereum (web3)",
         intent: PaymentIntentSchema.parse({
           protocol: "x402",
           action: "pay",
@@ -265,7 +274,7 @@ program
         }),
       },
       {
-        label: "5️⃣  AP2 Visa Direct payment (web2)",
+        label: "5️⃣   AP2 Visa Direct payment (web2)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -278,7 +287,20 @@ program
         }),
       },
       {
-        label: "6️⃣  AP2 Google Pay payment (web2)",
+        label: "6️⃣   AP2 Mastercard Send payment (web2)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "75.00",
+          currency: "USD",
+          recipient: "5500000000000004",
+          network: "web2",
+          gateway: "mastercard",
+          description: "Demo: AP2 Mastercard Send",
+        }),
+      },
+      {
+        label: "7️⃣   AP2 Google Pay payment (web2)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -292,7 +314,7 @@ program
         }),
       },
       {
-        label: "7️⃣  AP2 Apple Pay payment (web2)",
+        label: "8️⃣   AP2 Apple Pay payment (web2)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -306,7 +328,33 @@ program
         }),
       },
       {
-        label: "8️⃣  Over-limit payment (triggers policy engine)",
+        label: "9️⃣   x402 remote resource payment (x402 client)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "x402",
+          action: "pay",
+          amount: "1.00",
+          currency: "USDC",
+          recipient: "https://api.premium-service.example.com/v1/data",
+          network: "base",
+          gateway: "x402",
+          description: "Demo: x402 remote resource access",
+        }),
+      },
+      {
+        label: "🔟  AP2 remote mandate payment (AP2 client)",
+        intent: PaymentIntentSchema.parse({
+          protocol: "ap2",
+          action: "pay",
+          amount: "19.99",
+          currency: "USD",
+          recipient: "https://merchant.example.com/ap2/process-payment",
+          gateway: "ap2",
+          description: "Demo: AP2 remote mandate submission",
+          metadata: { payment_method_type: "card" },
+        }),
+      },
+      {
+        label: "⚠️   Over-limit payment (triggers policy engine)",
         intent: PaymentIntentSchema.parse({
           protocol: "ap2",
           action: "pay",
@@ -325,7 +373,12 @@ program
       try {
         const result = await executePayment(demo.intent, "cli", "default_wallet");
         if (result.success) {
-          console.log(`  ✅ Success${result.txHash ? ` | TX: ${result.txHash}` : ""}${result.web2Result ? ` | ID: ${result.web2Result.transaction_id}` : ""}`);
+          const idParts: string[] = [];
+          if (result.txHash) idParts.push(`TX: ${result.txHash}`);
+          if (result.web2Result) idParts.push(`ID: ${result.web2Result.transaction_id}`);
+          if (result.x402Result?.txHash) idParts.push(`x402 TX: ${result.x402Result.txHash}`);
+          if (result.ap2Result) idParts.push(`Mandate: ${result.ap2Result.mandate_id}`);
+          console.log(`  ✅ Success${idParts.length ? " | " + idParts.join(" | ") : ""}`);
         } else {
           console.log(`  ❌ Not executed: ${result.error ?? "confirmation required"}`);
         }
@@ -341,7 +394,7 @@ program
 
     console.log("\n══════════════════════════════════════════════════");
     console.log("  Demo complete. All transactions are in SQLite.");
-    console.log("  Run: openclaw-payment audit --limit 20");
+    console.log("  Run: openclaw-payment audit --limit 30");
     console.log("══════════════════════════════════════════════════\n");
   });
 
