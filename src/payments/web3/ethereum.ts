@@ -40,6 +40,17 @@ const USDC_ADDRESSES: Record<string, Address> = {
   polygon: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
 };
 
+const USDT_ADDRESSES: Record<string, Address> = {
+  ethereum: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+  base: "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+  polygon: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+};
+
+const WELL_KNOWN_TOKENS: Record<string, Record<string, Address>> = {
+  USDC: USDC_ADDRESSES,
+  USDT: USDT_ADDRESSES,
+};
+
 // ─── Chain Resolver ─────────────────────────────────────────────────────────
 
 function resolveChain(networkName: string): { chain: Chain; rpcUrl: string } {
@@ -168,7 +179,7 @@ export async function sendErc20(
   const { chain, rpcUrl } = resolveChain(networkName);
 
   const contractAddress =
-    tokenAddress ?? USDC_ADDRESSES[networkName];
+    tokenAddress ?? WELL_KNOWN_TOKENS[tokenSymbol.toUpperCase()]?.[networkName];
   if (!contractAddress) {
     throw new Error(
       `No known address for ${tokenSymbol} on ${networkName}. Provide tokenAddress.`
