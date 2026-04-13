@@ -101,6 +101,7 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
   const config = getConfig();
   const logger = getLogger();
 
+  // Determine payment type
   let paymentType: ProtocolRoute["paymentType"];
   let gateway: string;
 
@@ -117,29 +118,29 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
       paymentType = "web2";
     }
   } else {
-    // ── Auto-detect based on protocol, currency, and recipient ──────────
-    const cryptoCurrencies = ["USDC", "ETH", "WETH", "DAI", "USDT"];
-    const isRecipientUrl =
-      intent.recipient.startsWith("http://") ||
-      intent.recipient.startsWith("https://");
-
-    if (intent.protocol === "x402" && isRecipientUrl) {
+    // Auto-detect based on recipient's URL with protocol hints → protocol client
+    const isUrl = intent.recipient.startsWith("http://") || intent.recipient.startsWith("https://");
+    if (isUrl && intent.protocol === "x402") {
       // Recipient is a URL → use x402 client to pay for the remote resource
       paymentType = "x402";
       gateway = "x402";
-    } else if (intent.protocol === "ap2" && isRecipientUrl) {
+    } else if (isUrl && intent.protocol === "ap2") {
       // Recipient is a remote AP2 endpoint → use AP2 client
       paymentType = "ap2";
       gateway = "ap2";
-    } else if (
-      intent.protocol === "x402" ||
-      cryptoCurrencies.includes(intent.currency.toUpperCase())
-    ) {
-      paymentType = "web3";
-      gateway = "viem";
     } else {
-      paymentType = "web2";
-      gateway = "stripe"; // default web2 gateway
+      // Auto-detect based on protocol and currency
+      const cryptoCurrencies = ["USDC", "ETH", "WETH", "DAI", "USDT"];
+      if (
+        intent.protocol === "x402" ||
+        cryptoCurrencies.includes(intent.currency.toUpperCase())
+      ) {
+        paymentType = "web3";
+        gateway = "viem";
+      } else {
+        paymentType = "web2";
+        gateway = "stripe"; // default web2 gateway
+      }
     }
   }
 
