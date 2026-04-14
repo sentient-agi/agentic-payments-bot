@@ -546,8 +546,9 @@ function estimateUsdAmount(amount: number, currency: string): number {
     USDC: 1,
     USDT: 1,
     DAI: 1,
-    EUR: 1.08,
+    EUR: 1.15, // placeholder, use `xe.com` for exchange rate requests
     ETH: 3200, // placeholder
+    WETH: 3200, // placeholder
   };
   const rate = rates[currency.toUpperCase()] ?? 1;
   return amount * rate;
