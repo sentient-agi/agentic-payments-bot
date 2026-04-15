@@ -1,5 +1,5 @@
 ---
-name: agent-payments-skill
+name: agentic-payments-bot
 description: >
   Dual-protocol agentic payment service supporting x402 (HTTP 402 onchain
   stablecoin payments) and AP2 (Google's Agent Payments Protocol with
@@ -29,7 +29,7 @@ os:
   - win32
 metadata:
   author: Sentient AGI Lab's
-  version: "0.3.0"
+  version: "0.6.0"
   tags: "payments x402 ap2 web3 web2 blockchain compliance googlepay applepay"
 ---
 
@@ -175,13 +175,13 @@ To query the audit log, output:
 
 The skill also provides a CLI. Key commands:
 
-- `agent-payments pay --protocol x402 --amount 10 --currency USDC --to 0x...`
-- `agent-payments pay --protocol ap2 --amount 35 --currency USD --to merchant-gpay --gateway googlepay`
-- `agent-payments pay --protocol ap2 --amount 59.99 --currency USD --to merchant-applepay --gateway applepay`
-- `agent-payments keys store --alias default_wallet --type web3_private_key --value "0x..."`
-- `agent-payments keys list`
-- `agent-payments tx <txId>`
-- `agent-payments audit --category payment --limit 20`
+- `agentic-payments-bot pay --protocol x402 --amount 10 --currency USDC --to 0x...`
+- `agentic-payments-bot pay --protocol ap2 --amount 35 --currency USD --to merchant-gpay --gateway googlepay`
+- `agentic-payments-bot pay --protocol ap2 --amount 59.99 --currency USD --to merchant-applepay --gateway applepay`
+- `agentic-payments-bot keys store --alias default_wallet --type web3_private_key --value "0x..."`
+- `agentic-payments-bot keys list`
+- `agentic-payments-bot tx <txId>`
+- `agentic-payments-bot audit --category payment --limit 20`
 
 ## Web API
 
@@ -213,7 +213,7 @@ In dry-run mode:
 
 - **CLI**: pass `--dry-run` flag to any command
 - **Config**: set `dry_run.enabled: true` in the YAML configuration
-- **Demo command**: `openclaw-payment demo` (always forces dry-run)
+- **Demo command**: `agentic-payments-bot demo` (always forces dry-run)
 
 ### Stub Modes
 
