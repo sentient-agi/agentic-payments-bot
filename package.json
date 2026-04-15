@@ -1,10 +1,10 @@
 {
-  "name": "openclaw-payment-skill",
-  "version": "0.5.0",
-  "description": "OpenClaw agentic payment skill with x402 and AP2 protocol support",
+  "name": "agentic-payments-bot",
+  "version": "0.6.0",
+  "description": "Agentic Payments Bot/Skill/Service/Assistant for Open Agent Skills Ecosystem - a payment agent with x402 and AP2 protocols support",
   "main": "dist/index.js",
   "bin": {
-    "openclaw-payment": "dist/cli.js"
+    "agentic-payments-bot": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
