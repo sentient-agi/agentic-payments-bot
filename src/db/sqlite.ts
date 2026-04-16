@@ -36,13 +36,13 @@ export function getDb(): Database.Database {
 
 function runMigrations(db: Database.Database): void {
   db.exec(`
-    -- Encrypted keys/tokens storage (AWS KMS encrypted entries)
+    -- Encrypted keys/tokens storage (KMS encrypted entries)
     CREATE TABLE IF NOT EXISTS encrypted_keys (
       id          TEXT PRIMARY KEY,
-      key_type    TEXT NOT NULL,           -- 'web3_private_key' | 'stripe_token' | 'paypal_token' | 'visa_token' | 'mastercard_token'
+      key_type    TEXT NOT NULL,           -- 'web3_private_key' | 'stripe_token' | 'paypal_token' | 'visa_token' | 'mastercard_token' | 'googlepay_token' | 'applepay_token'
       key_alias   TEXT NOT NULL UNIQUE,    -- human-readable alias
-      ciphertext  BLOB NOT NULL,           -- AWS KMS encrypted blob
-      kms_key_id  TEXT NOT NULL,           -- KMS key ARN used for encryption
+      ciphertext  BLOB NOT NULL,           -- KMS encrypted blob
+      kms_key_id  TEXT NOT NULL,           -- KMS key ARN or provider ID used for encryption
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -51,7 +51,7 @@ function runMigrations(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS transactions (
       id              TEXT PRIMARY KEY,
       protocol        TEXT NOT NULL,        -- 'x402' | 'ap2'
-      gateway         TEXT,                 -- 'viem' | 'stripe' | 'paypal' | 'visa' | 'mastercard'
+      gateway         TEXT,                 -- 'viem' | 'stripe' | 'paypal' | 'visa' | 'mastercard' | 'googlepay' | 'applepay' | 'x402' | 'ap2'
       action          TEXT NOT NULL,        -- 'pay'
       amount          REAL NOT NULL,
       amount_usd      REAL NOT NULL,        -- normalized to USD for policy checks

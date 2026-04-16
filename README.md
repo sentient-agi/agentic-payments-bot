@@ -4123,6 +4123,8 @@ npm run dev          # ts-node src/index.ts
 | `zod` | `^3.24.0` | Schema validation |
 | `uuid` | `^11.1.0` | UUID generation for IDs |
 | `readline-sync` | `^1.4.10` | CLI interactive prompts |
+| `chalk` | `^5.4.0` | Terminal color output |
+| `dotenv` | `^16.5.0` | Environment variable loading |
 
 **Optional dependencies** (install only for the KMS providers you need):
 

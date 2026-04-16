@@ -20,7 +20,6 @@ requires:
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_KMS_KEY_ID
-    - AWS_REGION
   config:
     - paymentConfigPath
 os:
@@ -73,7 +72,7 @@ from your message automatically):
   "action": "pay",
   "amount": "<decimal string, e.g. 10.50>",
   "currency": "USDC | USDT | ETH | WETH | DAI | USD | EUR",
-  "recipient": "<blockchain address or merchant ID>",
+  "recipient": "<blockchain address or merchant ID or URL>",
   "network": "ethereum | base | polygon | web2 | null",
   "gateway": "viem | visa | mastercard | paypal | stripe | googlepay | applepay | x402 | ap2 | null",
   "description": "<human-readable description>",

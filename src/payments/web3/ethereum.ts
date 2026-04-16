@@ -52,7 +52,7 @@ const DAI_ADDRESSES: Record<string, Address> = {
   polygon: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
 };
 
-/** Token symbol → { addresses, decimals } */
+/** Unified token registry: symbol → { addresses per network, decimal places } */
 const WELL_KNOWN_TOKENS: Record<string, { addresses: Record<string, Address>; decimals: number }> = {
   USDC: { addresses: USDC_ADDRESSES, decimals: 6 },
   USDT: { addresses: USDT_ADDRESSES, decimals: 6 },

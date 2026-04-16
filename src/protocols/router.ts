@@ -118,7 +118,7 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
       paymentType = "web2";
     }
   } else {
-    // Auto-detect based on recipient's URL with protocol hints → protocol client
+    // Auto-detect: based on recipient's URL with matching protocol → protocol client
     const isUrl = intent.recipient.startsWith("http://") || intent.recipient.startsWith("https://");
     if (isUrl && intent.protocol === "x402") {
       // Recipient is a URL → use x402 client to pay for the remote resource

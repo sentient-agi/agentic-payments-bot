@@ -10,13 +10,12 @@ import { listEncryptedKeys, deleteEncryptedKey } from "./db/key-store";
 import { queryAuditLog } from "./db/audit";
 import { getTransactionById } from "./db/transactions";
 import { getConfig } from "./config/loader";
-import { getDb } from "./db/sqlite";
 
 const program = new Command();
 
 program
   .name("agentic-payments-bot")
-  .description("Agentic Payment Bot — CLI Interface")
+  .description("Agentic Payments Bot — CLI Interface")
   .version("0.6.0")
   .option("-c, --config <path>", "Path to YAML config file", "config/default.yaml")
   .option("--dry-run", "Enable dry-run mode (no real payments, no AWS KMS)");
