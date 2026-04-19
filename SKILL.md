@@ -5,7 +5,9 @@ description: >
   stablecoin payments) and AP2 (Google's Agent Payments Protocol with
   cryptographic mandates). Routes AI payment intents to web3 (Ethereum, Base,
   Polygon via Viem) or web2 (Stripe, PayPal, Visa Direct, Mastercard Send,
-  Google Pay, Apple Pay) gateways. Includes AWS KMS key management,
+  Google Pay, Apple Pay) gateways. Can also act as an outbound x402 or AP2
+  client — paying for external x402-protected resources or submitting
+  mandates to external AP2 services. Includes pluggable KMS key management,
   SQLite-backed policy engine with spending limits and compliance checks,
   human-in-the-loop confirmation on policy violations, full audit trail, and
   CLI / web API / chat interfaces. Use this skill when the user asks to send
@@ -72,9 +74,9 @@ from your message automatically):
   "action": "pay",
   "amount": "<decimal string, e.g. 10.50>",
   "currency": "USDC | USDT | ETH | WETH | DAI | USD | EUR",
-  "recipient": "<blockchain address or merchant ID or URL>",
+  "recipient": "<blockchain address, merchant ID, or URL>",
   "network": "ethereum | base | polygon | web2 | null",
-  "gateway": "viem | visa | mastercard | paypal | stripe | googlepay | applepay | x402 | ap2 | null",
+  "gateway": "viem | stripe | paypal | visa | mastercard | googlepay | applepay | x402 | ap2 | null",
   "description": "<human-readable description>",
   "metadata": {}
 }
@@ -82,17 +84,26 @@ from your message automatically):
 
 ### Field Rules
 
-- `protocol` — **required**. `"x402"` for onchain, `"ap2"` for agent-mediated.
+- `protocol` — **required**. A metadata tag classifying the payment's flavour:
+  - `"x402"` — onchain / crypto / stablecoin payments.
+  - `"ap2"` — agent-mediated / mandate-based payments.
+  - **Note:** `protocol` does NOT determine how the payment is executed — `gateway` does.
 - `action` — **required**. Always `"pay"`.
 - `amount` — **required**. Decimal string, never negative.
 - `currency` — **required**. One of the configured allowed currencies.
-- `recipient` — **required**. `0x...` address for web3; email or merchant ID for web2.
+- `recipient` — **required**. `0x...` address for web3; email or merchant ID for web2; **URL** for outbound x402/AP2 client.
 - `network` — optional. Omit or `null` to use the configured default.
-- `gateway` — optional. Omit or `null` for auto-detection (crypto → viem, fiat → stripe).
+- `gateway` — optional. The execution backend. Omit or `null` for auto-detection.
+  - `"viem"` — direct on-chain ETH/ERC-20 transfer.
+  - `"stripe"`, `"paypal"`, `"visa"`, `"mastercard"`, `"googlepay"`, `"applepay"` — web2 gateways.
+  - `"x402"` — **outbound x402 client** — pays for an external x402-protected resource (the `recipient` must be a URL).
+  - `"ap2"` — **outbound AP2 client** — submits a mandate to an external AP2 service (the `recipient` should be a URL).
+  - When omitted: auto-detected from currency (crypto→`viem`, fiat→`stripe`) or URL recipient.
 - `description` — optional. Short human-readable note.
 - `metadata` — optional. Arbitrary key-value pairs for gateway-specific data.
   - For **Google Pay**: include `"paymentToken"` (required, from client-side Google Pay JS API) and optionally `"countryCode"` (default `"US"`).
-  - For **Apple Pay**: include `"paymentToken"` (required, from client-side Apple Pay JS API) and optionally `"validationURL"` (for merchant session validation).
+  - For **Apple Pay**: include `"paymentToken"` (required, from client-side Google Pay JS API) and optionally `"validationURL"` (for merchant session validation).
+  - For **AP2 client** (`gateway: "ap2"`): include `"payment_method_type"` (e.g. `"stripe"`, `"card"`).
 
 ### Google Pay Example
 
@@ -126,6 +137,46 @@ from your message automatically):
   "metadata": {
     "paymentToken": "<encrypted-token-from-apple-pay-js>",
     "validationURL": "https://apple-pay-gateway-cert.apple.com/paymentservices/startSession"
+  }
+}
+```
+
+### x402 Client Example (Paying for an External Resource)
+
+Use `gateway: "x402"` when the recipient is a URL of an x402-protected resource.
+The skill acts as an **outbound x402 client**: discovers the 402 payment
+requirements, signs the payment, and retrieves the resource.
+
+```json
+{
+  "protocol": "x402",
+  "action": "pay",
+  "amount": "1.00",
+  "currency": "USDC",
+  "recipient": "https://api.premium-service.com/v1/data",
+  "network": "base",
+  "gateway": "x402",
+  "description": "Access premium data via x402"
+}
+```
+
+### AP2 Client Example (Submitting a Mandate to an External Service)
+
+Use `gateway: "ap2"` when the recipient is a URL of an AP2-compliant payment
+processor. The skill acts as an **outbound AP2 client**: creates a mandate,
+signs it, obtains credentials, and submits it.
+
+```json
+{
+  "protocol": "ap2",
+  "action": "pay",
+  "amount": "49.99",
+  "currency": "USD",
+  "recipient": "https://merchant.example.com/ap2/process-payment",
+  "gateway": "ap2",
+  "description": "Premium subscription via AP2",
+  "metadata": {
+    "payment_method_type": "stripe"
   }
 }
 ```
@@ -174,9 +225,11 @@ To query the audit log, output:
 
 The skill also provides a CLI. Key commands:
 
-- `agentic-payments-bot pay --protocol x402 --amount 10 --currency USDC --to 0x...`
+- `agentic-payments-bot pay --protocol x402 --amount 10 --currency USDC --to 0x... --gateway viem`
 - `agentic-payments-bot pay --protocol ap2 --amount 35 --currency USD --to merchant-gpay --gateway googlepay`
 - `agentic-payments-bot pay --protocol ap2 --amount 59.99 --currency USD --to merchant-applepay --gateway applepay`
+- `agentic-payments-bot pay --protocol x402 --amount 1 --currency USDC --to https://api.example.com/data --gateway x402`
+- `agentic-payments-bot pay --protocol ap2 --amount 30 --currency USD --to https://merchant.example.com/ap2/pay --gateway ap2`
 - `agentic-payments-bot keys store --alias default_wallet --type web3_private_key --value "0x..."`
 - `agentic-payments-bot keys list`
 - `agentic-payments-bot tx <txId>`
