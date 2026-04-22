@@ -221,29 +221,28 @@ export async function executePayment(
         dryRun,
       };
     } else if (route.paymentType === "x402") {
-      const x402Client = new X402Client();
-      const x402Result = await executeX402ClientPayment(x402Client, intent, walletKeyAlias, tx, dryRun);
+      const result = await executeX402ClientPayment(intent, walletKeyAlias, tx, dryRun);
       return {
-        success: x402Result.success,
+        success: result.success,
         tx,
-        txHash: x402Result.txHash,
+        txHash: result.txHash,
         policyResult,
         confirmationRequired: policyResult.requiresHumanConfirmation,
-        error: x402Result.error,
+        error: result.error,
         dryRun,
       };
     } else if (route.paymentType === "ap2") {
-      const ap2Client = new AP2Client();
-      const ap2Result = await executeAP2ClientPayment(ap2Client, intent, walletKeyAlias, tx, dryRun);
+      const result = await executeAP2ClientPayment(intent, walletKeyAlias, tx, dryRun);
       return {
-        success: ap2Result.success,
+        success: result.success,
         tx,
         policyResult,
         confirmationRequired: policyResult.requiresHumanConfirmation,
-        error: ap2Result.error,
+        error: result.error,
         dryRun,
       };
     } else {
+      // web2: stripe, paypal, visa, mastercard, googlepay, applepay
       const result = await executeWeb2Payment(route.gateway, intent);
       updateTransactionStatus(tx.id, "executed", {
         tx_hash: result.transaction_id,
@@ -335,15 +334,14 @@ async function executeWeb3Payment(
 // ─── x402 Client Execution Helper ───────────────────────────────────────────
 
 async function executeX402ClientPayment(
-  client: InstanceType<typeof X402Client>,
   intent: PaymentIntent,
-  walletKeyAlias: string,
+  _walletKeyAlias: string,
   tx: TransactionRecord,
   dryRun: boolean
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
   const logger = getLogger();
 
-  // In dry-run, simulate the entire flow
+  // Dry-run: stub the whole flow
   if (dryRun) {
     const { stubX402Settlement } = await import("./dry-run/stubs");
     const result = await stubX402Settlement();
@@ -359,23 +357,29 @@ async function executeX402ClientPayment(
     return { success: result.success, txHash: result.txHash, error: result.error };
   }
 
-  // 1. Discover payment requirements
+  const client = new X402Client();
+
+  // 1. Discover payment requirements from the remote resource
   const details = await client.discoverPaymentRequirements(intent.recipient);
   if (!details) {
-    // Resource did not require payment (not 402)
+    // Resource didn't return 402 — no payment needed
     updateTransactionStatus(tx.id, "executed");
+    logger.info("x402 client: resource accessible without payment", {
+      resource: intent.recipient,
+    });
     return { success: true };
   }
 
-  // 2. Build & sign payment (simplified — full EIP-3009 signing omitted for brevity)
-  // In production, decode the private key and build a signed authorization
-  logger.info("x402 client: discovered payment requirements", {
+  logger.info("x402 client: payment required", {
     resource: intent.recipient,
     amount: details.maxAmountRequired,
     asset: details.asset,
+    network: details.network,
   });
 
-  // For now, submit an unsigned placeholder — real signing requires EIP-3009 flow
+  // 2. Build & sign the EIP-3009 authorization
+  //    (Full signing requires the wallet private key + Viem EIP-3009 flow.
+  //     Below is the structural wiring; production signing is TODO.)
   const payload = client.buildPaymentPayload(intent, details, "0x0", {
     signature: "0x0",
     from: "0x0",
@@ -386,13 +390,20 @@ async function executeX402ClientPayment(
     nonce: String(Date.now()),
   });
 
-  // 3. Submit payment
+  // 3. Submit payment and get the resource + settlement proof
   const { settlement } = await client.submitPayment(intent.recipient, payload);
 
   updateTransactionStatus(tx.id, settlement.success ? "executed" : "failed", {
     tx_hash: settlement.txHash,
     error_message: settlement.error,
   });
+
+  auditLog(
+    settlement.success ? "info" : "error",
+    "payment",
+    "x402_client_payment_completed",
+    { tx_id: tx.id, txHash: settlement.txHash, resource: intent.recipient },
+  );
 
   return {
     success: settlement.success,
@@ -404,7 +415,6 @@ async function executeX402ClientPayment(
 // ─── AP2 Client Execution Helper ────────────────────────────────────────────
 
 async function executeAP2ClientPayment(
-  client: InstanceType<typeof AP2Client>,
   intent: PaymentIntent,
   _walletKeyAlias: string,
   tx: TransactionRecord,
@@ -413,7 +423,7 @@ async function executeAP2ClientPayment(
   const logger = getLogger();
   const config = getConfig();
 
-  // In dry-run, simulate the entire flow
+  // Dry-run: stub the whole flow
   if (dryRun) {
     const { stubAP2Payment } = await import("./dry-run/stubs");
     const result = await stubAP2Payment(intent);
@@ -429,30 +439,28 @@ async function executeAP2ClientPayment(
     return { success: result.status === "success", error: result.error };
   }
 
-  // 1. Create mandate
+  const client = new AP2Client();
+
+  // 1. Create mandate from the payment intent
   const agentId = config.protocols.ap2.server.agent_id;
   const mandate = client.createMandate(intent, agentId);
 
-  // 2. Sign mandate
+  // 2. Sign the mandate via the credential provider
   const signedMandate = await client.requestMandateSignature(mandate);
 
-  // 3. Get payment credentials
+  // 3. Get scoped payment credentials
   const paymentMethodType =
     (intent.metadata?.payment_method_type as string) ?? "stripe";
   const credentials = await client.getPaymentCredentials(
     signedMandate,
-    paymentMethodType
+    paymentMethodType,
   );
 
-  // 4. Submit payment
+  // 4. Submit to the merchant's payment processor (or the intent's URL recipient)
   const merchantUrl = intent.recipient.startsWith("http")
     ? intent.recipient
     : undefined;
-  const result = await client.submitPayment(
-    signedMandate,
-    credentials,
-    merchantUrl
-  );
+  const result = await client.submitPayment(signedMandate, credentials, merchantUrl);
 
   updateTransactionStatus(tx.id, result.status === "success" ? "executed" : "failed", {
     tx_hash: result.transaction_id,
@@ -463,12 +471,13 @@ async function executeAP2ClientPayment(
     result.status === "success" ? "info" : "error",
     "payment",
     "ap2_client_payment_completed",
-    {
-      tx_id: tx.id,
-      mandate_id: result.mandate_id,
-      status: result.status,
-    }
+    { tx_id: tx.id, mandate_id: result.mandate_id, status: result.status },
   );
+
+  logger.info("AP2 client: payment completed", {
+    mandate_id: result.mandate_id,
+    status: result.status,
+  });
 
   return { success: result.status === "success", error: result.error };
 }
